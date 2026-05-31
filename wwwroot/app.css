@@ -105,6 +105,22 @@ h1 {
     color: var(--muted);
 }
 
+.suite-nav-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: 0 0 1.25rem;
+    color: inherit;
+}
+
+.suite-nav-icon svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
 .suite-nav-link.active,
 .suite-nav-link:hover {
     border-color: var(--line);
