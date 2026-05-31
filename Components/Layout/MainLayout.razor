@@ -1,0 +1,47 @@
+﻿@inherits LayoutComponentBase
+@inject IEnumerable<ISuiteModuleProvider> ModuleProviders
+
+<PageTitle>GHCP Suite</PageTitle>
+
+<div class="suite-shell">
+    <header class="suite-topbar">
+        <a href="/" class="suite-brand">GHCP Suite</a>
+        <span class="suite-tagline">Local portal for sessions, config, agents, and resume workflows.</span>
+    </header>
+
+    <div class="suite-body">
+        <aside class="suite-nav">
+            @foreach (var module in _modules)
+            {
+                <NavLink href="@module.Route"
+                         Match="@(module.Route == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)"
+                         class="suite-nav-link">
+                    <span>@module.Glyph</span>
+                    <span>@module.Title</span>
+                </NavLink>
+            }
+        </aside>
+
+        <main class="suite-content">
+            @Body
+        </main>
+    </div>
+</div>
+
+<div id="blazor-error-ui">
+    An unhandled error has occurred.
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">🗙</a>
+</div>
+
+@code {
+    private IReadOnlyList<SuiteModuleDescriptor> _modules = Array.Empty<SuiteModuleDescriptor>();
+
+    protected override void OnInitialized()
+    {
+        _modules = ModuleProviders
+            .SelectMany(provider => provider.GetModules())
+            .OrderBy(module => module.Order)
+            .ToArray();
+    }
+}

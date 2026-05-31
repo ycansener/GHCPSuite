@@ -1,0 +1,116 @@
+@page "/agents/{AgentName}"
+@inject ICopilotAgentCatalogService AgentCatalogService
+@inject ICopilotAgentRunService AgentRunService
+@inject ICopilotConfigEditorService ConfigEditorService
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Agent</PageTitle>
+
+<h1>Agent</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading agent detail...</p>
+}
+else if (_agent is null)
+{
+    <p class="empty-state">Agent not found.</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">@_agent.DisplayName</div>
+        <p class="row-description">@_agent.Description</p>
+        @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
+        {
+            <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
+        }
+        <div class="kv-grid">
+            <div class="kv-item"><span>Name</span><strong>@_agent.Name</strong></div>
+            <div class="kv-item"><span>Kind</span><strong>@_agent.Kind</strong></div>
+            <div class="kv-item"><span>Model</span><strong>@_agent.Model</strong></div>
+            <div class="kv-item"><span>Tools</span><strong>@_agent.ToolAccess</strong></div>
+            <div class="kv-item"><span>Source</span><strong>@_agent.SourceLabel</strong></div>
+            <div class="kv-item"><span>Package</span><strong>@_agent.PackageVersion</strong></div>
+            <div class="kv-item"><span>Definition</span><strong>@_agent.DefinitionPath</strong></div>
+            <div class="kv-item"><span>Custom</span><strong>@(_agent.IsCustom ? "Yes" : "No")</strong></div>
+        </div>
+        <div class="panel-actions inline-actions">
+            <button type="button" class="action-button" @onclick="RunAgent">Run</button>
+            @if (_agent.IsCustom)
+            {
+                <button type="button" class="action-button action-button-muted" @onclick="ModifyAgent">Modify</button>
+            }
+        </div>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Definition file</div>
+        <pre class="terminal-output file-preview">@(_definitionContent ?? "No definition content found.")</pre>
+    </section>
+}
+
+@code {
+    [Parameter] public string AgentName { get; set; } = string.Empty;
+
+    private bool _loading = true;
+    private CopilotDefinedAgent? _agent;
+    private string? _definitionContent;
+    private string? _feedbackMessage;
+    private bool _feedbackSucceeded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _agent = await AgentCatalogService.GetDefinedAgentAsync(AgentName);
+        _definitionContent = _agent is not null && File.Exists(_agent.FullPath)
+            ? await File.ReadAllTextAsync(_agent.FullPath)
+            : null;
+        _loading = false;
+    }
+
+    private async Task RunAgent()
+    {
+        if (_agent is null)
+        {
+            return;
+        }
+
+        var result = AgentRunService.RunAgent(_agent);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "agent-run",
+                Title = $"Ran {_agent.DisplayName}",
+                AgentName = _agent.Name
+            });
+        }
+    }
+
+    private async Task ModifyAgent()
+    {
+        if (_agent is null)
+        {
+            return;
+        }
+
+        var result = ConfigEditorService.OpenPath(_agent.FullPath, _agent.DisplayName);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "config-open",
+                Title = $"Opened {_agent.DisplayName}",
+                AgentName = _agent.Name,
+                FilePath = _agent.FullPath
+            });
+        }
+    }
+}

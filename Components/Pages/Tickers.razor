@@ -1,0 +1,247 @@
+@page "/tickers"
+@inject ICopilotTickerService TickerService
+@inject ICopilotWorkService WorkService
+@inject ICopilotConfigEditorService ConfigEditorService
+
+<PageTitle>GHCP Suite | Tickers</PageTitle>
+
+<h1>Tickers</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading tickers...</p>
+}
+else
+{
+    <section class="panel-grid">
+        <article class="panel-card">
+            <div class="panel-label">Tickers</div>
+            <div class="panel-metric">@_tickers.Count</div>
+            <div class="panel-copy">Saved recurring prompts for GHCP or an optional custom agent.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Enabled</div>
+            <div class="panel-metric">@_tickers.Count(ticker => ticker.Enabled)</div>
+            <div class="panel-copy">Definitions currently eligible for scheduled execution.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Recent runs</div>
+            <div class="panel-metric">@_runs.Count</div>
+            <div class="panel-copy">Latest recorded ticker executions across all workspaces.</div>
+        </article>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p class="feedback-banner @(_messageSucceeded ? "feedback-success" : "feedback-error")">@_message</p>
+    }
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Create ticker</div>
+            @if (_workspaces.Count == 0)
+            {
+                <p class="empty-state">Create a workspace first. Tickers always run inside a workspace folder.</p>
+            }
+            else
+            {
+                <div class="terminal-form">
+                    <label>
+                        <span>Name</span>
+                        <input class="terminal-input" @bind="_draft.Name" />
+                    </label>
+                    <label>
+                        <span>Workspace</span>
+                        <select class="terminal-input" @bind="_draft.WorkspaceId">
+                            @foreach (var workspace in _workspaces)
+                            {
+                                <option value="@workspace.Id">@workspace.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>
+                        <span>Agent (optional)</span>
+                        <input class="terminal-input" @bind="_draft.AgentName" placeholder="idea-partner" />
+                    </label>
+                    <label>
+                        <span>Interval minutes</span>
+                        <InputNumber class="terminal-input" @bind-Value="_draft.IntervalMinutes" />
+                    </label>
+                    <label>
+                        <span>Prompt</span>
+                        <textarea class="terminal-input work-textarea" @bind="_draft.Prompt" placeholder="Review the workspace backlog and create the next actions."></textarea>
+                    </label>
+                    <label class="settings-checkbox">
+                        <InputCheckbox @bind-Value="_draft.Enabled" />
+                        <span>Enable ticker after save</span>
+                    </label>
+                    <div class="panel-actions">
+                        <button type="button" class="action-button" @onclick="SaveTickerAsync">Save ticker</button>
+                    </div>
+                </div>
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Recent runs</div>
+            @if (_runs.Count == 0)
+            {
+                <p class="empty-state">No ticker runs yet.</p>
+            }
+            else
+            {
+                <div class="timeline-list">
+                    @foreach (var run in _runs.Take(12))
+                    {
+                        <div class="timeline-item">
+                            <div class="timeline-meta">@FormatDate(run.CompletedAt) · @run.Status · @run.WorkspaceName</div>
+                            <div class="row-title">@run.TickerName</div>
+                            @if (!string.IsNullOrWhiteSpace(run.Summary))
+                            {
+                                <div class="row-description">@run.Summary</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(run.OutputPath))
+                            {
+                                <div class="panel-actions">
+                                    <button type="button" class="action-button action-button-small" @onclick="() => OpenOutputAsync(run.OutputPath!)">Open output</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Saved tickers</div>
+        @if (_tickers.Count == 0)
+        {
+            <p class="empty-state">No tickers defined yet.</p>
+        }
+        else
+        {
+            @foreach (var ticker in _tickers)
+            {
+                <div class="list-row">
+                    <div>
+                        <div class="row-title">@ticker.Name</div>
+                        <div class="row-description">@ticker.Prompt</div>
+                        <div class="row-meta">@GetWorkspaceName(ticker.WorkspaceId) · Every @ticker.IntervalMinutes min · @(string.IsNullOrWhiteSpace(ticker.AgentName) ? "GHCP" : $"Agent: {ticker.AgentName}")</div>
+                        <div class="row-meta">Next: @FormatDate(ticker.NextRunAt) · Last: @FormatDate(ticker.LastRunAt)</div>
+                        @if (!string.IsNullOrWhiteSpace(ticker.LastError))
+                        {
+                            <div class="row-meta">@ticker.LastError</div>
+                        }
+                    </div>
+                    <div class="row-side row-actions">
+                        <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
+                        <button type="button" class="action-button action-button-small" @onclick="() => RunNowAsync(ticker.Id)">Run now</button>
+                        <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ToggleEnabledAsync(ticker)">@((ticker.Enabled ? "Disable" : "Enable"))</button>
+                        <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => DeleteAsync(ticker.Id)">Delete</button>
+                    </div>
+                </div>
+            }
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "workspaceId")]
+    public string? WorkspaceQueryId { get; set; }
+
+    private bool _loading = true;
+    private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
+    private IReadOnlyList<CopilotTickerDefinition> _tickers = Array.Empty<CopilotTickerDefinition>();
+    private IReadOnlyList<CopilotTickerRun> _runs = Array.Empty<CopilotTickerRun>();
+    private CopilotTickerDefinition _draft = new() { IntervalMinutes = 60, Enabled = true };
+    private string? _message;
+    private bool _messageSucceeded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _workspaces = await WorkService.GetWorkspacesAsync();
+        _tickers = await TickerService.GetTickersAsync();
+        _runs = await TickerService.GetTickerRunsAsync(maxItems: 20);
+
+        var requestedWorkspaceId = !string.IsNullOrWhiteSpace(WorkspaceQueryId)
+            && _workspaces.Any(workspace => string.Equals(workspace.Id, WorkspaceQueryId, StringComparison.OrdinalIgnoreCase))
+                ? WorkspaceQueryId
+                : null;
+
+        if (!string.IsNullOrWhiteSpace(requestedWorkspaceId))
+        {
+            _draft.WorkspaceId = requestedWorkspaceId;
+        }
+        else if (_workspaces.Count > 0 && string.IsNullOrWhiteSpace(_draft.WorkspaceId))
+        {
+            _draft.WorkspaceId = (await WorkService.GetActiveWorkspaceAsync())?.Id ?? _workspaces[0].Id;
+        }
+
+        _loading = false;
+    }
+
+    private async Task SaveTickerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_draft.Name) || string.IsNullOrWhiteSpace(_draft.WorkspaceId) || string.IsNullOrWhiteSpace(_draft.Prompt))
+        {
+            _messageSucceeded = false;
+            _message = "Name, workspace, and prompt are required.";
+            return;
+        }
+
+        await TickerService.SaveTickerAsync(_draft);
+        _messageSucceeded = true;
+        _message = $"Saved ticker {_draft.Name}.";
+        _draft = new CopilotTickerDefinition
+        {
+            IntervalMinutes = 60,
+            Enabled = true,
+            WorkspaceId = _workspaces.FirstOrDefault()?.Id ?? string.Empty
+        };
+        await LoadAsync();
+    }
+
+    private async Task RunNowAsync(string tickerId)
+    {
+        await TickerService.QueueTickerRunAsync(tickerId);
+        _messageSucceeded = true;
+        _message = "Ticker queued.";
+        await LoadAsync();
+    }
+
+    private async Task ToggleEnabledAsync(CopilotTickerDefinition ticker)
+    {
+        await TickerService.SetTickerEnabledAsync(ticker.Id, !ticker.Enabled);
+        _messageSucceeded = true;
+        _message = $"{ticker.Name} {(!ticker.Enabled ? "enabled" : "disabled")}.";
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(string tickerId)
+    {
+        await TickerService.DeleteTickerAsync(tickerId);
+        _messageSucceeded = true;
+        _message = "Ticker deleted.";
+        await LoadAsync();
+    }
+
+    private async Task OpenOutputAsync(string outputPath)
+    {
+        var result = ConfigEditorService.OpenPath(outputPath, Path.GetFileName(outputPath));
+        _messageSucceeded = result.Succeeded;
+        _message = result.Message;
+        await Task.CompletedTask;
+    }
+
+    private string GetWorkspaceName(string workspaceId) =>
+        _workspaces.FirstOrDefault(workspace => string.Equals(workspace.Id, workspaceId, StringComparison.OrdinalIgnoreCase))?.Name ?? "Unknown workspace";
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Not scheduled";
+}

@@ -1,0 +1,17 @@
+{
+  "CopilotSuite": {
+    "WorkspaceRootDirectory": "C:\\Projects",
+    "StartupDirectory": "C:\\Projects",
+    "PreferWindowsTerminal": true,
+    "SessionCategories": {
+      "52507791-657a-40ec-9f48-903b59026eff": "Coding",
+      "64cf9f3c-2169-4fb1-b36a-f5b86573c73f": "Coding",
+      "e7670621-9e07-4225-99df-fc037f3ec059": "Research",
+      "c2dc7297-6f16-486a-8f2a-6c081188f2a5": "Research",
+      "a5a9b82f-4639-4d70-93da-4789699da8ab": "Research",
+      "43cfdd74-666d-4911-8544-3f3ab17815f6": "Coding",
+      "30ea5093-0d8e-43df-a4ce-3ba6077a6993": "Coding",
+      "a9c114a9-dd16-4d9b-b76e-cdd5ea49b17d": "Coding"
+    }
+  }
+}

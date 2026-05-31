@@ -1,0 +1,413 @@
+@page "/workspaces/{WorkspaceId}"
+@inject ICopilotWorkService WorkService
+@inject ICopilotTickerService TickerService
+@inject ICopilotWorkspaceLaunchService WorkspaceLaunchService
+@inject ICopilotResumeService ResumeService
+@inject ICopilotConfigEditorService ConfigEditorService
+@inject NavigationManager Navigation
+
+<PageTitle>GHCP Suite | Workspace</PageTitle>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading workspace...</p>
+}
+else if (_snapshot is null)
+{
+    <p class="empty-state">Workspace not found.</p>
+}
+else
+{
+    <h1>@_snapshot.Workspace.Name</h1>
+
+    <section class="panel-grid">
+        <article class="panel-card">
+            <div class="panel-label">Workspace</div>
+            <div class="panel-metric">@_snapshot.Workspace.Name</div>
+            <div class="panel-copy">@_snapshot.Workspace.RootPath</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Sessions</div>
+            <div class="panel-metric">@_snapshot.Telemetry.SessionCount</div>
+            <div class="panel-copy">Tracked sessions whose working directory is inside this workspace.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Tickers</div>
+            <div class="panel-metric">@_snapshot.Telemetry.TickerCount</div>
+            <div class="panel-copy">@_snapshot.Telemetry.EnabledTickers enabled recurring tasks.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Agents used</div>
+            <div class="panel-metric">@_snapshot.AgentsUsed.Count</div>
+            <div class="panel-copy">Agents run directly or referenced by workspace tickers.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Time spent</div>
+            <div class="panel-metric">@FormatDuration(_snapshot.Telemetry.TimeSpent)</div>
+            <div class="panel-copy">Derived from the tracked session timeline in this workspace.</div>
+        </article>
+    </section>
+
+    <section class="panel-card">
+        @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
+        {
+            <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
+        }
+        <div class="content-grid">
+            <div>
+                @if (!string.IsNullOrWhiteSpace(_snapshot.Workspace.Description))
+                {
+                    <div class="row-description">@_snapshot.Workspace.Description</div>
+                }
+                <div class="row-meta">Workspace root · @_snapshot.Workspace.RootPath</div>
+            </div>
+            <div class="row-side row-actions">
+                <button type="button" class="action-button" @onclick="StartWorkspaceSessionAsync">Start GHCP session</button>
+                <button type="button" class="action-button action-button-muted" @onclick="OpenCreateTicker">Create ticker</button>
+                <button type="button" class="action-button action-button-muted" @onclick="OpenWorkspaceFolderAsync">Open folder</button>
+                <a class="action-button action-button-muted" href="/dashboards?workspaceId=@Uri.EscapeDataString(_snapshot.Workspace.Id)">Workspace dashboard</a>
+                <a class="action-button action-button-muted" href="/work">Global work</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Workspace sessions</div>
+            @if (_snapshot.Sessions.Count == 0)
+            {
+                <p class="empty-state">No sessions are tied to this workspace yet. Start one from here to create the first scoped session.</p>
+            }
+            else
+            {
+                <div class="scroll-list">
+                    @foreach (var session in _snapshot.Sessions)
+                    {
+                        <div class="list-row">
+                            <div>
+                                <div class="row-title"><a href="/sessions/@session.SessionId">@session.Name</a></div>
+                                @if (!string.IsNullOrWhiteSpace(session.Description))
+                                {
+                                    <div class="row-description">@session.Description</div>
+                                }
+                                <div class="row-meta">@session.WorkflowStatus · @session.WorkingDirectory</div>
+                            </div>
+                            <div class="row-side row-actions">
+                                <span>@FormatDate(session.UpdatedAt ?? session.CreatedAt)</span>
+                                <button type="button" class="action-button action-button-small" @onclick="() => ResumeAsync(session)">Resume</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Workspace tickers</div>
+            @if (_snapshot.Tickers.Count == 0)
+            {
+                <p class="empty-state">No tickers defined for this workspace yet.</p>
+            }
+            else
+            {
+                <div class="scroll-list">
+                    @foreach (var ticker in _snapshot.Tickers)
+                    {
+                        <div class="list-row">
+                            <div>
+                                <div class="row-title">@ticker.Name</div>
+                                <div class="row-description">@ticker.Prompt</div>
+                                <div class="row-meta">Every @ticker.IntervalMinutes min · @(string.IsNullOrWhiteSpace(ticker.AgentName) ? "GHCP" : $"Agent: {ticker.AgentName}")</div>
+                                <div class="row-meta">Next: @FormatDate(ticker.NextRunAt) · Last: @FormatDate(ticker.LastRunAt)</div>
+                            </div>
+                            <div class="row-side row-actions">
+                                <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
+                                <button type="button" class="action-button action-button-small" @onclick="() => RunTickerAsync(ticker.Id)">Run now</button>
+                            </div>
+                        </div>
+                    }    
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Agents used</div>
+            @if (_snapshot.AgentsUsed.Count == 0)
+            {
+                <p class="empty-state">No agents have been used or assigned to tickers yet.</p>
+            }
+            else
+            {
+                @foreach (var agent in _snapshot.AgentsUsed)
+                {
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title"><a href="/agents/@Uri.EscapeDataString(agent.Name)">@agent.Name</a></div>
+                            <div class="row-meta">Usage inside this workspace</div>
+                        </div>
+                        <div class="row-side">
+                            <span>@agent.RunCount run(s)</span>
+                        </div>
+                    </div>
+                }
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Recent activity</div>
+            @if (_snapshot.RecentActivity.Count == 0)
+            {
+                <p class="empty-state">No recorded activity for this workspace yet.</p>
+            }
+            else
+            {
+                <div class="timeline-list">
+                    @foreach (var entry in _snapshot.RecentActivity)
+                    {
+                        <div class="timeline-item">
+                            <div class="timeline-meta">@FormatDate(entry.Timestamp) · @FormatActivityType(entry.Type)</div>
+                            <div class="row-title">@entry.Title</div>
+                            <div class="row-meta">@FormatActivityContext(entry)</div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Workspace files</div>
+        <div class="row-meta">@_snapshot.Workspace.RootPath</div>
+        <div class="inline-filter-row">
+            <input class="terminal-input compact-input" @bind="_workspaceFileSearch" @bind:event="oninput" placeholder="Search files and folders..." />
+            <select class="terminal-input compact-input" @bind="_workspaceFileMode">
+                <option value="all">All</option>
+                <option value="directories">Folders</option>
+                <option value="files">Files</option>
+            </select>
+        </div>
+        <div class="row-meta">Showing @FilteredWorkspaceEntries.Count of @WorkspaceEntryMatchCount matching entries</div>
+        @if (_snapshot.WorkspaceEntries.Count == 0)
+        {
+            <p class="empty-state">No files or folders were found under this workspace root.</p>
+        }
+        else
+        {
+            <div class="scroll-list">
+                @foreach (var entry in FilteredWorkspaceEntries)
+                {
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title">
+                                <a href="#"
+                                   class="session-entry-link @(entry.IsDirectory ? "session-entry-directory" : "session-entry-file")"
+                                   title="Open @entry.RelativePath"
+                                   @onclick:preventDefault="true"
+                                   @onclick="() => OpenWorkspaceEntryAsync(entry)">
+                                    @entry.Name@(entry.IsDirectory ? "\\" : string.Empty)
+                                </a>
+                            </div>
+                            <div class="row-meta">@entry.RelativePath</div>
+                        </div>
+                        <div class="row-side">
+                            <span class="status-pill @(entry.IsDirectory ? "status-idle" : "status-done")">@(entry.IsDirectory ? "Folder" : "File")</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public string WorkspaceId { get; set; } = string.Empty;
+
+    private bool _loading = true;
+    private CopilotWorkspaceSnapshot? _snapshot;
+    private string _workspaceFileSearch = string.Empty;
+    private string _workspaceFileMode = "all";
+    private string? _feedbackMessage;
+    private bool _feedbackSucceeded;
+    private IReadOnlyList<CopilotSessionFolderEntry> FilteredWorkspaceEntries => _snapshot is null
+        ? Array.Empty<CopilotSessionFolderEntry>()
+        : _snapshot.WorkspaceEntries
+            .Where(MatchesWorkspaceEntry)
+            .Take(120)
+            .ToArray();
+    private int WorkspaceEntryMatchCount => _snapshot?.WorkspaceEntries.Count(MatchesWorkspaceEntry) ?? 0;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        if (_snapshot is not null)
+        {
+            await WorkService.SetActiveWorkspaceAsync(_snapshot.Workspace.Id);
+        }
+
+        _loading = false;
+    }
+
+    private async Task StartWorkspaceSessionAsync()
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        var result = WorkspaceLaunchService.StartWorkspaceSession(_snapshot.Workspace);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "workspace-session-start",
+                Title = $"Started GHCP in {_snapshot.Workspace.Name}",
+                Project = _snapshot.Workspace.Name,
+                FilePath = _snapshot.Workspace.RootPath
+            });
+            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        }
+    }
+
+    private async Task OpenWorkspaceFolderAsync()
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        var result = ConfigEditorService.OpenPath(_snapshot.Workspace.RootPath, _snapshot.Workspace.Name);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "workspace-open",
+                Title = $"Opened {_snapshot.Workspace.Name}",
+                Project = _snapshot.Workspace.Name,
+                FilePath = _snapshot.Workspace.RootPath
+            });
+            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        }
+    }
+
+    private async Task ResumeAsync(CopilotSessionSummary session)
+    {
+        var result = ResumeService.ResumeSession(session);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "session-resume",
+                Title = $"Resumed {session.Name}",
+                SessionId = session.SessionId,
+                SessionName = session.Name,
+                Project = _snapshot?.Workspace.Name
+            });
+            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        }
+    }
+
+    private void OpenCreateTicker()
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(_snapshot.Workspace.Id)}");
+    }
+
+    private async Task RunTickerAsync(string tickerId)
+    {
+        await TickerService.QueueTickerRunAsync(tickerId);
+        _feedbackSucceeded = true;
+        _feedbackMessage = "Ticker queued.";
+        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+    }
+
+    private async Task OpenWorkspaceEntryAsync(CopilotSessionFolderEntry entry)
+    {
+        var result = ConfigEditorService.OpenPath(entry.FullPath, entry.Name);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "workspace-open",
+                Title = $"Opened {entry.Name}",
+                Project = _snapshot?.Workspace.Name,
+                FilePath = entry.FullPath
+            });
+            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        }
+    }
+
+    private static string FormatActivityType(string type) => type switch
+    {
+        "agent-run" => "Agent run",
+        "session-resume" => "Session resume",
+        "workspace-session-start" => "Workspace start",
+        "workspace-open" => "Workspace open",
+        "ticker-run" => "Ticker run",
+        "config-open" => "Config edit",
+        "work-save" => "Work updated",
+        "template-apply" => "Template applied",
+        _ => "Activity"
+    };
+
+    private static string FormatActivityContext(CopilotActivityEntry entry)
+    {
+        var parts = new[]
+        {
+            entry.Project,
+            entry.SessionName,
+            entry.AgentName
+        }.Where(value => !string.IsNullOrWhiteSpace(value));
+
+        return string.Join(" · ", parts);
+    }
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
+
+    private static string FormatDuration(TimeSpan duration) =>
+        duration.TotalHours >= 1
+            ? $"{duration.TotalHours:0.#}h"
+            : $"{Math.Max(1, duration.TotalMinutes):0}m";
+
+    private bool MatchesWorkspaceEntry(CopilotSessionFolderEntry entry)
+    {
+        var matchesType = _workspaceFileMode switch
+        {
+            "directories" => entry.IsDirectory,
+            "files" => !entry.IsDirectory,
+            _ => true
+        };
+
+        if (!matchesType)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_workspaceFileSearch))
+        {
+            return true;
+        }
+
+        return entry.Name.Contains(_workspaceFileSearch, StringComparison.OrdinalIgnoreCase)
+            || entry.RelativePath.Contains(_workspaceFileSearch, StringComparison.OrdinalIgnoreCase);
+    }
+}

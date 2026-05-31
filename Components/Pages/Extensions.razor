@@ -1,0 +1,82 @@
+@page "/extensions"
+@inject ICopilotEnvironmentService EnvironmentService
+@inject IEnumerable<ISuiteModuleProvider> ModuleProviders
+
+<PageTitle>GHCP Suite | Extensions</PageTitle>
+
+<h1>Extensions</h1>
+
+<section class="panel-card">
+    <div class="section-title">Registered module providers</div>
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Provider</th>
+                    <th>Modules</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var provider in _providerRows)
+                {
+                    <tr>
+                        <td>@provider.ProviderName</td>
+                        <td>@provider.Modules</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel-card">
+    <div class="section-title">Module surface</div>
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Route</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var module in _modules)
+                {
+                    <tr>
+                        <td>@module.Title</td>
+                        <td>@module.Route</td>
+                        <td>@module.Description</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel-card">
+    <div class="section-title">Extension note</div>
+    <p class="panel-copy">
+        Add another <code>ISuiteModuleProvider</code> registration in DI and return additional <code>SuiteModuleDescriptor</code>
+        values to extend navigation without rewriting the shell. The same pattern can back future GHCP providers for remote agents,
+        richer session history, or alternate local resume/launch actions.
+    </p>
+    <p class="row-meta">Copilot home: @_paths.CopilotHome</p>
+</section>
+
+@code {
+    private CopilotPaths _paths = default!;
+    private IReadOnlyList<SuiteModuleDescriptor> _modules = Array.Empty<SuiteModuleDescriptor>();
+    private IReadOnlyList<(string ProviderName, string Modules)> _providerRows = Array.Empty<(string, string)>();
+
+    protected override void OnInitialized()
+    {
+        _paths = EnvironmentService.GetPaths();
+        _modules = ModuleProviders.SelectMany(provider => provider.GetModules()).OrderBy(module => module.Order).ToArray();
+        _providerRows = ModuleProviders
+            .Select(provider => (
+                provider.GetType().Name,
+                string.Join(", ", provider.GetModules().Select(module => module.Title))))
+            .ToArray();
+    }
+}

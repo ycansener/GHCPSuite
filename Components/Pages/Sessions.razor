@@ -1,0 +1,513 @@
+@page "/sessions"
+@inject ICopilotSessionService SessionService
+@inject ICopilotResumeService ResumeService
+@inject ICopilotSettingsService SettingsService
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Sessions</PageTitle>
+
+<h1>Sessions</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading sessions...</p>
+}
+else if (_filteredSessions.Count == 0)
+{
+    <section class="panel-card">
+        <div class="section-title">Sessions</div>
+        <p class="empty-state">No sessions matched the current filters.</p>
+    </section>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">Organize work</div>
+        <p class="panel-copy">Filter sessions, group them by project/category/status, and save commonly used views.</p>
+        @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
+        {
+            <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
+        }
+
+        <div class="settings-grid">
+            <div class="settings-field">
+                <label>Search</label>
+                <input class="terminal-input" @bind="_searchFilter" @bind:event="oninput" placeholder="Name, summary, project, next action" />
+            </div>
+            <div class="settings-field">
+                <label>Project</label>
+                <select class="terminal-input" @bind="_projectFilter">
+                    <option value="">All projects</option>
+                    @foreach (var project in _knownProjects)
+                    {
+                        <option value="@project">@project</option>
+                    }
+                </select>
+            </div>
+            <div class="settings-field">
+                <label>Status</label>
+                <select class="terminal-input" @bind="_statusFilter">
+                    <option value="">All statuses</option>
+                    @foreach (var status in WorkflowStatuses)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </div>
+            <div class="settings-field">
+                <label>Category</label>
+                <select class="terminal-input" @bind="_categoryFilter">
+                    <option value="">All categories</option>
+                    @foreach (var category in _knownCategories)
+                    {
+                        <option value="@category">@category</option>
+                    }
+                    <option value="@UncategorizedLabel">@UncategorizedLabel</option>
+                </select>
+            </div>
+            <div class="settings-field">
+                <label>Group by</label>
+                <select class="terminal-input" @bind="_groupBy">
+                    <option value="project">Project</option>
+                    <option value="category">Category</option>
+                    <option value="status">Status</option>
+                </select>
+            </div>
+            <div class="settings-field">
+                <label>Save current view</label>
+                <div class="inline-filter-row">
+                    <input class="terminal-input compact-input" @bind="_savedViewName" placeholder="View name" />
+                    <button type="button" class="action-button action-button-small" @onclick="SaveCurrentViewAsync">Save view</button>
+                    <button type="button" class="action-button action-button-small action-button-muted" @onclick="ClearFilters">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        @if (_savedViews.Count > 0)
+        {
+            <div class="panel-actions">
+                <div class="quick-actions">
+                    @foreach (var view in _savedViews)
+                    {
+                        <div class="saved-view-chip">
+                            <button type="button" class="selector-button saved-view-button" @onclick="() => ApplyView(view)">
+                                <span>@view.Name</span>
+                                <span class="row-meta">@FormatViewMeta(view)</span>
+                            </button>
+                            <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => DeleteViewAsync(view.Id)">Delete</button>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Sessions by @GetGroupLabel()</div>
+        @foreach (var group in BuildGroups())
+        {
+            <details class="tree-group" open>
+                <summary class="tree-summary">
+                    <span class="tree-title">@group.Key</span>
+                    <span class="tree-count">@group.Sessions.Count session(s)</span>
+                </summary>
+
+                <div class="table-shell tree-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Session</th>
+                                <th>Workflow</th>
+                                <th>Project</th>
+                                <th>Category</th>
+                                <th>Priority</th>
+                                <th>Tasks</th>
+                                <th>Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var session in group.Sessions)
+                            {
+                                <tr>
+                                    <td>
+                                        <a href="/sessions/@session.SessionId">@session.Name</a>
+                                        @if (!string.IsNullOrWhiteSpace(session.Description))
+                                        {
+                                            <div class="row-description">@session.Description</div>
+                                        }
+                                        <div class="row-meta">@session.SessionId</div>
+                                        @if (!string.IsNullOrWhiteSpace(session.NextAction))
+                                        {
+                                            <div class="row-meta">Next: @session.NextAction</div>
+                                        }
+                                    </td>
+                                    <td><span class="status-pill @GetWorkflowClass(session.WorkflowStatus)">@session.WorkflowStatus</span></td>
+                                    <td>@(session.Project ?? "No project")</td>
+                                    <td class="category-cell">
+                                        <div class="category-editor">
+                                            <select class="terminal-input category-select"
+                                                    value="@GetCategorySelection(session.SessionId)"
+                                                    @onchange="e => UpdateCategorySelection(session.SessionId, e.Value?.ToString())">
+                                                <option value="">@UncategorizedLabel</option>
+                                                @foreach (var category in _knownCategories)
+                                                {
+                                                    <option value="@category">@category</option>
+                                                }
+                                                <option value="@CustomCategoryValue">Custom...</option>
+                                            </select>
+                                            @if (ShouldShowCustomCategoryInput(session.SessionId))
+                                            {
+                                                <input class="terminal-input category-input"
+                                                       placeholder="Type a category"
+                                                       value="@GetCategoryDraft(session.SessionId)"
+                                                       @oninput="e => UpdateCategoryDraft(session.SessionId, e.Value?.ToString())" />
+                                            }
+                                            <div class="inline-actions category-actions">
+                                                <button type="button" class="action-button action-button-small" @onclick="() => SaveCategoryAsync(session)">Save</button>
+                                                <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ClearCategoryAsync(session)">Clear</button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>@session.Priority</td>
+                                    <td>@session.CompletedTaskCount/@(session.CompletedTaskCount + session.OpenTaskCount)</td>
+                                    <td>@FormatDate(session.UpdatedAt)</td>
+                                    <td>
+                                        <div class="inline-actions">
+                                            <button type="button" class="action-button action-button-small" @onclick="() => ResumeAsync(session)">Resume</button>
+                                            <a class="action-button action-button-small action-button-muted" href="/sessions/@session.SessionId">Open</a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        }
+    </section>
+}
+
+@code {
+    private const string UncategorizedLabel = "Uncategorized";
+    private const string CustomCategoryValue = "__custom__";
+    private static readonly string[] WorkflowStatuses = ["Planned", "Active", "Blocked", "Done"];
+
+    [SupplyParameterFromQuery(Name = "search")] public string? Search { get; set; }
+    [SupplyParameterFromQuery(Name = "project")] public string? Project { get; set; }
+    [SupplyParameterFromQuery(Name = "status")] public string? Status { get; set; }
+    [SupplyParameterFromQuery(Name = "category")] public string? Category { get; set; }
+    [SupplyParameterFromQuery(Name = "groupBy")] public string? GroupBy { get; set; }
+
+    private bool _loading = true;
+    private IReadOnlyList<CopilotSessionSummary> _sessions = Array.Empty<CopilotSessionSummary>();
+    private IReadOnlyList<CopilotSessionSummary> _filteredSessions = Array.Empty<CopilotSessionSummary>();
+    private IReadOnlyList<CopilotSavedView> _savedViews = Array.Empty<CopilotSavedView>();
+    private IReadOnlyList<string> _knownCategories = Array.Empty<string>();
+    private IReadOnlyList<string> _knownProjects = Array.Empty<string>();
+    private readonly Dictionary<string, string> _categoryDrafts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _categorySelections = new(StringComparer.OrdinalIgnoreCase);
+    private string _searchFilter = string.Empty;
+    private string _projectFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _groupBy = "project";
+    private string _savedViewName = string.Empty;
+    private string? _feedbackMessage;
+    private bool _feedbackSucceeded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loading)
+        {
+            await LoadAsync();
+        }
+
+        _searchFilter = Search?.Trim() ?? _searchFilter;
+        _projectFilter = Project?.Trim() ?? _projectFilter;
+        _statusFilter = Status?.Trim() ?? _statusFilter;
+        _categoryFilter = Category?.Trim() ?? _categoryFilter;
+        _groupBy = NormalizeGroupBy(GroupBy ?? _groupBy);
+        ApplyFilters();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _sessions = await SessionService.GetSessionsAsync();
+        _savedViews = await WorkService.GetSavedViewsAsync();
+        _categoryDrafts.Clear();
+        _categorySelections.Clear();
+        _knownCategories = BuildKnownCategories(_sessions.Select(session => session.Category));
+        _knownProjects = _sessions.Select(session => session.Project ?? "No project")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var session in _sessions)
+        {
+            SetCategoryState(session.SessionId, session.Category);
+        }
+
+        ApplyFilters();
+    }
+
+    private async Task ResumeAsync(CopilotSessionSummary session)
+    {
+        var result = ResumeService.ResumeSession(session);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "session-resume",
+                Title = $"Resumed {session.Name}",
+                SessionId = session.SessionId,
+                SessionName = session.Name,
+                Project = session.Project
+            });
+        }
+    }
+
+    private async Task SaveCategoryAsync(CopilotSessionSummary session)
+    {
+        var category = GetSelectedCategoryValue(session.SessionId);
+        await SettingsService.SaveSessionCategoryAsync(session.SessionId, category);
+        UpdateSessionCategory(session.SessionId, category);
+        _feedbackSucceeded = true;
+        _feedbackMessage = category is null
+            ? $"Moved {session.Name} to {UncategorizedLabel}."
+            : $"Saved category '{category}' for {session.Name}.";
+    }
+
+    private async Task ClearCategoryAsync(CopilotSessionSummary session)
+    {
+        UpdateCategoryDraft(session.SessionId, string.Empty);
+        await SaveCategoryAsync(session);
+    }
+
+    private async Task SaveCurrentViewAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_savedViewName))
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = "Enter a name before saving this view.";
+            return;
+        }
+
+        await WorkService.SaveSavedViewAsync(new CopilotSavedView
+        {
+            Name = _savedViewName,
+            GroupBy = _groupBy,
+            Status = NormalizeBlank(_statusFilter),
+            Project = NormalizeBlank(_projectFilter),
+            Category = NormalizeBlank(_categoryFilter),
+            SearchText = NormalizeBlank(_searchFilter)
+        });
+
+        _savedViews = await WorkService.GetSavedViewsAsync();
+        _savedViewName = string.Empty;
+        _feedbackSucceeded = true;
+        _feedbackMessage = "Saved the current session view.";
+    }
+
+    private async Task DeleteViewAsync(string id)
+    {
+        await WorkService.DeleteSavedViewAsync(id);
+        _savedViews = await WorkService.GetSavedViewsAsync();
+        _feedbackSucceeded = true;
+        _feedbackMessage = "Deleted the saved view.";
+    }
+
+    private void ApplyView(CopilotSavedView view)
+    {
+        _searchFilter = view.SearchText ?? string.Empty;
+        _projectFilter = view.Project ?? string.Empty;
+        _statusFilter = view.Status ?? string.Empty;
+        _categoryFilter = view.Category ?? string.Empty;
+        _groupBy = NormalizeGroupBy(view.GroupBy);
+        ApplyFilters();
+    }
+
+    private void ClearFilters()
+    {
+        _searchFilter = string.Empty;
+        _projectFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _categoryFilter = string.Empty;
+        _groupBy = "project";
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        _filteredSessions = _sessions
+            .Where(session => string.IsNullOrWhiteSpace(_projectFilter) || string.Equals(session.Project ?? "No project", _projectFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(session => string.IsNullOrWhiteSpace(_statusFilter) || string.Equals(session.WorkflowStatus, _statusFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(session =>
+            {
+                if (string.IsNullOrWhiteSpace(_categoryFilter))
+                {
+                    return true;
+                }
+
+                var category = session.Category ?? UncategorizedLabel;
+                return string.Equals(category, _categoryFilter, StringComparison.OrdinalIgnoreCase);
+            })
+            .Where(session => MatchesSearch(session, _searchFilter))
+            .OrderByDescending(session => session.UpdatedAt ?? session.CreatedAt ?? DateTimeOffset.MinValue)
+            .ToArray();
+    }
+
+    private IReadOnlyList<SessionGroup> BuildGroups() =>
+        _filteredSessions
+            .GroupBy(GetGroupKey, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new SessionGroup(group.Key, group.ToArray()))
+            .ToArray();
+
+    private string GetGroupKey(CopilotSessionSummary session) => _groupBy switch
+    {
+        "category" => session.Category ?? UncategorizedLabel,
+        "status" => session.WorkflowStatus,
+        _ => session.Project ?? "No project"
+    };
+
+    private string GetGroupLabel() => _groupBy switch
+    {
+        "category" => "category",
+        "status" => "workflow status",
+        _ => "project"
+    };
+
+    private void UpdateSessionCategory(string sessionId, string? category)
+    {
+        _sessions = _sessions
+            .Select(session => string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase)
+                ? session with { Category = category }
+                : session)
+            .ToArray();
+
+        _knownCategories = BuildKnownCategories(_sessions.Select(session => session.Category));
+        SetCategoryState(sessionId, category);
+        ApplyFilters();
+    }
+
+    private string GetCategoryDraft(string sessionId) =>
+        _categoryDrafts.TryGetValue(sessionId, out var value) ? value : string.Empty;
+
+    private string GetCategorySelection(string sessionId) =>
+        _categorySelections.TryGetValue(sessionId, out var value) ? value : string.Empty;
+
+    private void UpdateCategoryDraft(string sessionId, string? value) =>
+        _categoryDrafts[sessionId] = value ?? string.Empty;
+
+    private void UpdateCategorySelection(string sessionId, string? value)
+    {
+        var selection = value ?? string.Empty;
+        _categorySelections[sessionId] = selection;
+
+        if (!string.Equals(selection, CustomCategoryValue, StringComparison.Ordinal))
+        {
+            _categoryDrafts[sessionId] = selection;
+        }
+    }
+
+    private bool ShouldShowCustomCategoryInput(string sessionId) =>
+        string.Equals(GetCategorySelection(sessionId), CustomCategoryValue, StringComparison.Ordinal);
+
+    private void SetCategoryState(string sessionId, string? category)
+    {
+        var normalized = NormalizeCategory(category);
+        _categoryDrafts[sessionId] = normalized ?? string.Empty;
+        _categorySelections[sessionId] = ResolveCategorySelection(normalized);
+    }
+
+    private string? GetSelectedCategoryValue(string sessionId)
+    {
+        var selection = GetCategorySelection(sessionId);
+        return string.Equals(selection, CustomCategoryValue, StringComparison.Ordinal)
+            ? NormalizeCategory(GetCategoryDraft(sessionId))
+            : NormalizeCategory(selection);
+    }
+
+    private string ResolveCategorySelection(string? category)
+    {
+        if (category is null)
+        {
+            return string.Empty;
+        }
+
+        return _knownCategories.Contains(category, StringComparer.OrdinalIgnoreCase)
+            ? category
+            : CustomCategoryValue;
+    }
+
+    private static bool MatchesSearch(CopilotSessionSummary session, string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return true;
+        }
+
+        return Contains(session.Name, query)
+            || Contains(session.Description, query)
+            || Contains(session.Project, query)
+            || Contains(session.Category, query)
+            || Contains(session.NextAction, query)
+            || Contains(session.SessionId, query);
+    }
+
+    private static bool Contains(string? value, string query) =>
+        !string.IsNullOrWhiteSpace(value) && value.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> BuildKnownCategories(IEnumerable<string?> categories) =>
+        categories
+            .Select(NormalizeCategory)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(category => category, StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToArray();
+
+    private static string? NormalizeCategory(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? NormalizeBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string NormalizeGroupBy(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "category" => "category",
+        "status" => "status",
+        _ => "project"
+    };
+
+    private static string GetWorkflowClass(string status) => status switch
+    {
+        "Active" => "status-live",
+        "Blocked" => "status-warn",
+        "Done" => "status-done",
+        _ => "status-idle"
+    };
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
+
+    private static string FormatViewMeta(CopilotSavedView view)
+    {
+        var parts = new[]
+        {
+            view.GroupBy,
+            view.Status,
+            view.Project,
+            view.Category,
+            view.SearchText
+        }.Where(value => !string.IsNullOrWhiteSpace(value));
+
+        return string.Join(" · ", parts);
+    }
+
+    private sealed record SessionGroup(string Key, IReadOnlyList<CopilotSessionSummary> Sessions);
+}

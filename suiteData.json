@@ -1,0 +1,179 @@
+{
+  "Workspaces": [
+    {
+      "Id": "db5d07547fdb41f99b836157b581a676",
+      "Name": "GHCPSuite",
+      "RootPath": "C:\\Projects\\GHCPSuite",
+      "CreatedAt": "2026-05-31T22:18:29.4045534+00:00",
+      "UpdatedAt": "2026-05-31T22:18:29.4057562+00:00"
+    }
+  ],
+  "IgnoredWorkspaceFolders": [],
+  "ActiveWorkspaceId": "db5d07547fdb41f99b836157b581a676",
+  "Tickers": [],
+  "TickerRuns": [],
+  "SessionWork": {},
+  "SavedViews": [],
+  "Templates": [
+    {
+      "Id": "bugfix",
+      "Name": "Bugfix",
+      "Description": "Track diagnosis, fix, validation, and follow-up for a defect.",
+      "Status": "Active",
+      "Priority": "High",
+      "NextAction": "Reproduce the issue and isolate the failing path.",
+      "Tasks": [
+        {
+          "Title": "Reproduce the issue",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Identify root cause",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Implement and verify fix",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Document follow-up risks",
+          "Status": "Pending",
+          "CarryForward": true
+        }
+      ]
+    },
+    {
+      "Id": "feature-planning",
+      "Name": "Feature planning",
+      "Description": "Shape a feature from scope to implementation steps.",
+      "Status": "Planned",
+      "Priority": "Normal",
+      "NextAction": "Define scope, constraints, and success criteria.",
+      "Tasks": [
+        {
+          "Title": "Define scope and requirements",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Identify design and UX decisions",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Break work into implementation steps",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "List validation and rollout tasks",
+          "Status": "Pending",
+          "CarryForward": true
+        }
+      ]
+    },
+    {
+      "Id": "market-research",
+      "Name": "Market research",
+      "Description": "Investigate opportunity, competitors, and validation signals.",
+      "Status": "Planned",
+      "Priority": "Normal",
+      "NextAction": "Clarify the target customer and core problem.",
+      "Tasks": [
+        {
+          "Title": "Define target user and problem",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Research competitors and alternatives",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Summarize market signals and risks",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Recommend next validation steps",
+          "Status": "Pending",
+          "CarryForward": true
+        }
+      ]
+    },
+    {
+      "Id": "refactor",
+      "Name": "Refactor",
+      "Description": "Organize technical cleanup into safe, staged work.",
+      "Status": "Planned",
+      "Priority": "Normal",
+      "NextAction": "Identify the highest-risk coupling to untangle first.",
+      "Tasks": [
+        {
+          "Title": "Document current pain points",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Define target structure",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Implement incremental cleanup",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Confirm no regression areas remain",
+          "Status": "Pending",
+          "CarryForward": true
+        }
+      ]
+    },
+    {
+      "Id": "release-prep",
+      "Name": "Release prep",
+      "Description": "Prepare a change set for release and handoff.",
+      "Status": "Active",
+      "Priority": "High",
+      "NextAction": "Check release blockers and unresolved validation items.",
+      "Tasks": [
+        {
+          "Title": "Review blockers and risks",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Confirm release notes",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Validate deployment/readiness steps",
+          "Status": "Pending",
+          "CarryForward": false
+        },
+        {
+          "Title": "Capture post-release follow-up",
+          "Status": "Pending",
+          "CarryForward": true
+        }
+      ]
+    }
+  ],
+  "ActivityHistory": [
+    {
+      "Id": "656cc377958a4b0e8ddca1c3658f544b",
+      "Timestamp": "2026-05-31T22:19:42.7256132+00:00",
+      "Type": "workspace-open",
+      "Title": "Opened GHCPSuite",
+      "Project": "GHCPSuite",
+      "FilePath": "C:\\Projects\\GHCPSuite"
+    }
+  ]
+}

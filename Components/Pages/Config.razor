@@ -1,0 +1,101 @@
+@page "/config"
+@inject ICopilotConfigService ConfigService
+@inject ICopilotConfigEditorService ConfigEditorService
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Config</PageTitle>
+
+<h1>Config</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading GHCP config files...</p>
+}
+else
+{
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Known files</div>
+            @foreach (var file in _files)
+            {
+                <button type="button"
+                        class="selector-button @(_selectedFile?.FullPath == file.FullPath ? "selector-button-active" : null)"
+                        @onclick="@(() => SelectFile(file))">
+                    <span>@file.Name</span>
+                    <span class="row-meta">@file.Category</span>
+                </button>
+            }
+        </article>
+
+        <article class="panel-card">
+            @if (_selectedFile is null)
+            {
+                <p class="empty-state">No config file selected.</p>
+            }
+            else
+            {
+                <div class="section-title">@_selectedFile.Name</div>
+                @if (!string.IsNullOrWhiteSpace(_editorMessage))
+                {
+                    <p class="feedback-banner @(_editorSucceeded ? "feedback-success" : "feedback-error")">@_editorMessage</p>
+                }
+                <div class="kv-grid">
+                    <div class="kv-item"><span>Category</span><strong>@_selectedFile.Category</strong></div>
+                    <div class="kv-item"><span>Path</span><strong>@_selectedFile.FullPath</strong></div>
+                    <div class="kv-item"><span>Exists</span><strong>@(_selectedFile.Exists ? "Yes" : "No")</strong></div>
+                    <div class="kv-item"><span>Last modified</span><strong>@FormatDate(_selectedFile.LastModified)</strong></div>
+                </div>
+                <div class="panel-actions">
+                    <button type="button"
+                            class="action-button"
+                            disabled="@(!_selectedFile.Exists)"
+                            @onclick="EditSelectedFile">
+                        Edit
+                    </button>
+                </div>
+                <pre class="terminal-output file-preview">@_selectedFile.Content</pre>
+            }
+        </article>
+    </section>
+}
+
+@code {
+    private bool _loading = true;
+    private IReadOnlyList<CopilotFileEntry> _files = Array.Empty<CopilotFileEntry>();
+    private CopilotFileEntry? _selectedFile;
+    private string? _editorMessage;
+    private bool _editorSucceeded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _files = await ConfigService.GetConfigFilesAsync();
+        _selectedFile = _files.FirstOrDefault(file => file.Exists) ?? _files.FirstOrDefault();
+        _loading = false;
+    }
+
+    private void SelectFile(CopilotFileEntry file) => _selectedFile = file;
+
+    private async Task EditSelectedFile()
+    {
+        if (_selectedFile is null)
+        {
+            return;
+        }
+
+        var result = ConfigEditorService.OpenFile(_selectedFile);
+        _editorSucceeded = result.Succeeded;
+        _editorMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "config-open",
+                Title = $"Opened {_selectedFile.Name}",
+                FilePath = _selectedFile.FullPath
+            });
+        }
+    }
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
+}

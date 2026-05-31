@@ -1,0 +1,214 @@
+@page "/dashboards"
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Dashboards</PageTitle>
+
+<h1>Dashboards</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading dashboards...</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">Scope</div>
+        <div class="inline-filter-row">
+            <select class="terminal-input compact-input" @bind="_selectedWorkspaceId">
+                <option value="">All workspaces</option>
+                @foreach (var workspace in _dashboard.Workspaces)
+                {
+                    <option value="@workspace.WorkspaceId">@workspace.Name</option>
+                }
+            </select>
+            @if (SelectedWorkspace is not null)
+            {
+                <a class="action-button action-button-small" href="/workspaces/@Uri.EscapeDataString(SelectedWorkspace.WorkspaceId)">Open workspace</a>
+            }
+        </div>
+    </section>
+
+    <section class="panel-grid">
+        <article class="panel-card">
+            <div class="panel-label">Workspaces</div>
+            <div class="panel-metric">@ScopedWorkspaceCount</div>
+            <div class="panel-copy">Managed workspaces in the current dashboard scope.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Sessions</div>
+            <div class="panel-metric">@ScopedSessions</div>
+            <div class="panel-copy">Sessions mapped to the selected workspace scope.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Tickers</div>
+            <div class="panel-metric">@ScopedTickers</div>
+            <div class="panel-copy">@ScopedEnabledTickers enabled recurring tasks.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Agents used</div>
+            <div class="panel-metric">@ScopedAgents</div>
+            <div class="panel-copy">Distinct agents observed via runs or ticker assignments.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Time spent</div>
+            <div class="panel-metric">@FormatDuration(ScopedTimeSpent)</div>
+            <div class="panel-copy">Estimated from tracked session durations.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Latest worked</div>
+            <div class="panel-metric">@((LatestWorkspace?.Name) ?? "None")</div>
+            <div class="panel-copy">@FormatDate(LatestWorkspace?.LastWorkedAt)</div>
+        </article>
+    </section>
+
+    @if (SelectedWorkspace is not null)
+    {
+        <section class="panel-card">
+            <div class="section-title">Workspace focus</div>
+            <div class="kv-grid">
+                <div class="kv-item"><span>Name</span><strong>@SelectedWorkspace.Name</strong></div>
+                <div class="kv-item"><span>Root</span><strong>@SelectedWorkspace.RootPath</strong></div>
+                <div class="kv-item"><span>Active sessions</span><strong>@SelectedWorkspace.ActiveSessions</strong></div>
+                <div class="kv-item"><span>Blocked sessions</span><strong>@SelectedWorkspace.BlockedSessions</strong></div>
+                <div class="kv-item"><span>Files</span><strong>@SelectedWorkspace.FileCount</strong></div>
+                <div class="kv-item"><span>Folders</span><strong>@SelectedWorkspace.DirectoryCount</strong></div>
+            </div>
+        </section>
+    }
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Workspaces by recent activity</div>
+            @if (ScopedWorkspaces.Count == 0)
+            {
+                <p class="empty-state">No workspaces in scope.</p>
+            }
+            else
+            {
+                <div class="table-shell">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Workspace</th>
+                                <th>Last worked</th>
+                                <th>Sessions</th>
+                                <th>Tickers</th>
+                                <th>Agents</th>
+                                <th>Time spent</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var workspace in ScopedWorkspaces)
+                            {
+                                <tr>
+                                    <td><a href="/workspaces/@Uri.EscapeDataString(workspace.WorkspaceId)">@workspace.Name</a></td>
+                                    <td>@FormatDate(workspace.LastWorkedAt)</td>
+                                    <td>@workspace.SessionCount</td>
+                                    <td>@workspace.TickerCount (@workspace.EnabledTickers enabled)</td>
+                                    <td>@workspace.AgentCount</td>
+                                    <td>@FormatDuration(workspace.TimeSpent)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Recent activity</div>
+            @if (ScopedActivity.Count == 0)
+            {
+                <p class="empty-state">No tracked activity in scope.</p>
+            }
+            else
+            {
+                <div class="timeline-list">
+                    @foreach (var entry in ScopedActivity)
+                    {
+                        <div class="timeline-item">
+                            <div class="timeline-meta">@FormatDate(entry.Timestamp) · @FormatActivityType(entry.Type)</div>
+                            <div class="row-title">@entry.Title</div>
+                            <div class="row-meta">@FormatActivityContext(entry)</div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+}
+
+@code {
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "workspaceId")]
+    public string? WorkspaceQueryId { get; set; }
+
+    private bool _loading = true;
+    private CopilotWorkspaceDashboardSnapshot _dashboard = new(0, 0, 0, 0, 0, TimeSpan.Zero, Array.Empty<CopilotWorkspaceTelemetry>(), Array.Empty<CopilotActivityEntry>());
+    private string _selectedWorkspaceId = string.Empty;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _dashboard = await WorkService.GetWorkspaceDashboardAsync();
+        if (!string.IsNullOrWhiteSpace(WorkspaceQueryId)
+            && _dashboard.Workspaces.Any(workspace => string.Equals(workspace.WorkspaceId, WorkspaceQueryId, StringComparison.OrdinalIgnoreCase)))
+        {
+            _selectedWorkspaceId = WorkspaceQueryId;
+        }
+
+        _loading = false;
+    }
+
+    private CopilotWorkspaceTelemetry? SelectedWorkspace =>
+        _dashboard.Workspaces.FirstOrDefault(workspace => string.Equals(workspace.WorkspaceId, _selectedWorkspaceId, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<CopilotWorkspaceTelemetry> ScopedWorkspaces =>
+        SelectedWorkspace is null
+            ? _dashboard.Workspaces
+            : _dashboard.Workspaces.Where(workspace => string.Equals(workspace.WorkspaceId, SelectedWorkspace.WorkspaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+    private IReadOnlyList<CopilotActivityEntry> ScopedActivity =>
+        SelectedWorkspace is null
+            ? _dashboard.RecentActivity
+            : _dashboard.RecentActivity.Where(entry => string.Equals(entry.Project, SelectedWorkspace.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+    private int ScopedWorkspaceCount => ScopedWorkspaces.Count;
+    private int ScopedSessions => ScopedWorkspaces.Sum(workspace => workspace.SessionCount);
+    private int ScopedTickers => ScopedWorkspaces.Sum(workspace => workspace.TickerCount);
+    private int ScopedEnabledTickers => ScopedWorkspaces.Sum(workspace => workspace.EnabledTickers);
+    private int ScopedAgents => ScopedWorkspaces.Sum(workspace => workspace.AgentCount);
+    private TimeSpan ScopedTimeSpent => TimeSpan.FromTicks(ScopedWorkspaces.Sum(workspace => workspace.TimeSpent.Ticks));
+    private CopilotWorkspaceTelemetry? LatestWorkspace => ScopedWorkspaces.OrderByDescending(workspace => workspace.LastWorkedAt ?? DateTimeOffset.MinValue).FirstOrDefault();
+
+    private static string FormatActivityType(string type) => type switch
+    {
+        "agent-run" => "Agent run",
+        "session-resume" => "Session resume",
+        "workspace-session-start" => "Workspace start",
+        "workspace-open" => "Workspace open",
+        "ticker-run" => "Ticker run",
+        "config-open" => "Config edit",
+        "work-save" => "Work updated",
+        "template-apply" => "Template applied",
+        _ => "Activity"
+    };
+
+    private static string FormatActivityContext(CopilotActivityEntry entry)
+    {
+        var parts = new[]
+        {
+            entry.Project,
+            entry.SessionName,
+            entry.AgentName
+        }.Where(value => !string.IsNullOrWhiteSpace(value));
+
+        return string.Join(" · ", parts);
+    }
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
+
+    private static string FormatDuration(TimeSpan duration) =>
+        duration.TotalHours >= 1
+            ? $"{duration.TotalHours:0.#}h"
+            : $"{Math.Max(1, duration.TotalMinutes):0}m";
+}

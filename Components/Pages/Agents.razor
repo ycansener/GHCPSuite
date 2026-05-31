@@ -1,0 +1,185 @@
+@page "/agents"
+@inject ICopilotAgentCatalogService AgentCatalogService
+@inject ICopilotConfigEditorService ConfigEditorService
+@inject ICopilotAgentRunService AgentRunService
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Agents</PageTitle>
+
+<h1>Agents</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading installed Copilot agent definitions...</p>
+}
+else if (_visibleAgents.Count == 0)
+{
+    <section class="panel-card">
+        <div class="section-title">Installed Copilot agents</div>
+        <p class="panel-copy">Custom agents come from `~/.copilot/agents` or `.github/agents` under the configured startup directory. Default agents come from the Copilot CLI package definitions.</p>
+        @if (!string.IsNullOrWhiteSpace(_editorMessage))
+        {
+            <p class="feedback-banner @(_editorSucceeded ? "feedback-success" : "feedback-error")">@_editorMessage</p>
+        }
+        <div class="tab-strip" role="tablist" aria-label="Agent source">
+            <button type="button"
+                    role="tab"
+                    aria-selected="@(_showCustom ? "true" : "false")"
+                    class="selector-button agent-tab-button @GetTabClass(true)"
+                    @onclick='() => SelectTab(true)'>
+                Custom
+                <span class="tab-count">@_customAgents.Count</span>
+            </button>
+            <button type="button"
+                    role="tab"
+                    aria-selected="@(_showCustom ? "false" : "true")"
+                    class="selector-button agent-tab-button @GetTabClass(false)"
+                    @onclick='() => SelectTab(false)'>
+                Default
+                <span class="tab-count">@_defaultAgents.Count</span>
+            </button>
+        </div>
+        <p class="empty-state">@EmptyMessage</p>
+    </section>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">Installed Copilot agents</div>
+        <p class="panel-copy">Custom agents come from `~/.copilot/agents` or `.github/agents` under the configured startup directory. Default agents come from the Copilot CLI package definitions.</p>
+        <div class="tab-strip" role="tablist" aria-label="Agent source">
+            <button type="button"
+                    role="tab"
+                    aria-selected="@(_showCustom ? "true" : "false")"
+                    class="selector-button agent-tab-button @GetTabClass(true)"
+                    @onclick='() => SelectTab(true)'>
+                Custom
+                <span class="tab-count">@_customAgents.Count</span>
+            </button>
+            <button type="button"
+                    role="tab"
+                    aria-selected="@(_showCustom ? "false" : "true")"
+                    class="selector-button agent-tab-button @GetTabClass(false)"
+                    @onclick='() => SelectTab(false)'>
+                Default
+                <span class="tab-count">@_defaultAgents.Count</span>
+            </button>
+        </div>
+        <div class="table-shell">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Agent</th>
+                        <th>Kind</th>
+                        <th>Model</th>
+                        <th>Tools</th>
+                        <th>Source</th>
+                        <th>Package</th>
+                        <th>Definition</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var agent in _visibleAgents)
+                    {
+                        <tr>
+                            <td>
+                                <div class="row-title"><a href="@GetAgentUrl(agent)">@agent.DisplayName</a></div>
+                                <div class="row-description">@agent.Description</div>
+                                <div class="row-meta">@agent.Name</div>
+                            </td>
+                            <td><span class="status-pill @(agent.Kind == "Sidekick" ? "status-live" : "status-idle")">@agent.Kind</span></td>
+                            <td>@agent.Model</td>
+                            <td>@agent.ToolAccess</td>
+                            <td>@agent.SourceLabel</td>
+                            <td>@agent.PackageVersion</td>
+                            <td class="truncate">@agent.DefinitionPath</td>
+                            <td>
+                                <div class="inline-actions">
+                                    <button type="button"
+                                            class="action-button action-button-small"
+                                            @onclick="() => RunAgent(agent)">
+                                        Run
+                                    </button>
+                                    @if (agent.IsCustom)
+                                    {
+                                        <button type="button"
+                                                class="action-button action-button-small action-button-muted"
+                                                @onclick="() => EditAgent(agent)">
+                                            Modify
+                                        </button>
+                                    }
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+
+@code {
+    private bool _loading = true;
+    private IReadOnlyList<CopilotDefinedAgent> _agents = Array.Empty<CopilotDefinedAgent>();
+    private IReadOnlyList<CopilotDefinedAgent> _customAgents = Array.Empty<CopilotDefinedAgent>();
+    private IReadOnlyList<CopilotDefinedAgent> _defaultAgents = Array.Empty<CopilotDefinedAgent>();
+    private bool _showCustom = true;
+    private string? _editorMessage;
+    private bool _editorSucceeded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _agents = await AgentCatalogService.GetDefinedAgentsAsync();
+        _customAgents = _agents.Where(agent => agent.IsCustom).ToArray();
+        _defaultAgents = _agents.Where(agent => !agent.IsCustom).ToArray();
+        _loading = false;
+    }
+
+    private IReadOnlyList<CopilotDefinedAgent> _visibleAgents => _showCustom ? _customAgents : _defaultAgents;
+
+    private string EmptyMessage => _showCustom
+        ? "No custom Copilot agents were found in ~/.copilot/agents or the configured .github/agents folder."
+        : "No built-in Copilot agent definitions were found.";
+
+    private void SelectTab(bool showCustom) => _showCustom = showCustom;
+
+    private string GetTabClass(bool isCustomTab) => _showCustom == isCustomTab ? "selector-button-active" : string.Empty;
+
+    private string GetAgentUrl(CopilotDefinedAgent agent) => $"/agents/{Uri.EscapeDataString(agent.Name)}";
+
+    private async Task RunAgent(CopilotDefinedAgent agent)
+    {
+        var result = AgentRunService.RunAgent(agent);
+        _editorSucceeded = result.Succeeded;
+        _editorMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "agent-run",
+                Title = $"Ran {agent.DisplayName}",
+                AgentName = agent.Name
+            });
+        }
+    }
+
+    private async Task EditAgent(CopilotDefinedAgent agent)
+    {
+        var result = ConfigEditorService.OpenPath(agent.FullPath, agent.DisplayName);
+        _editorSucceeded = result.Succeeded;
+        _editorMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "config-open",
+                Title = $"Opened {agent.DisplayName}",
+                AgentName = agent.Name,
+                FilePath = agent.FullPath
+            });
+        }
+    }
+}

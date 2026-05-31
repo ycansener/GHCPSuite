@@ -1,0 +1,157 @@
+@page "/settings"
+@inject ICopilotSettingsService SettingsService
+@inject ICopilotEnvironmentService EnvironmentService
+
+<PageTitle>GHCP Suite | Settings</PageTitle>
+
+<h1>Settings</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading settings...</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">customSettings.json</div>
+        <p class="panel-copy">
+            These values are stored in <code>@_settingsFilePath</code>. Leave a field blank to keep automatic path discovery.
+            The app reads this file on startup and reloads it when the file changes.
+        </p>
+
+        @if (!string.IsNullOrWhiteSpace(_message))
+        {
+            <p class="feedback-banner @(_saveSucceeded ? "feedback-success" : "feedback-error")">@_message</p>
+        }
+
+        <EditForm Model="_model" OnValidSubmit="SaveAsync">
+            <div class="settings-grid">
+                <div class="settings-field">
+                    <label for="workspace-root">Workspace working directory</label>
+                    <InputText id="workspace-root" class="terminal-input" @bind-Value="_model.WorkspaceRootDirectory" />
+                </div>
+                <div class="settings-field">
+                    <label for="startup-directory">Startup directory</label>
+                    <InputText id="startup-directory" class="terminal-input" @bind-Value="_model.StartupDirectory" />
+                </div>
+                <div class="settings-field">
+                    <label for="user-profile">User profile override</label>
+                    <InputText id="user-profile" class="terminal-input" @bind-Value="_model.UserProfile" />
+                </div>
+                <div class="settings-field">
+                    <label for="copilot-home">Copilot home override</label>
+                    <InputText id="copilot-home" class="terminal-input" @bind-Value="_model.CopilotHome" />
+                </div>
+                <div class="settings-field">
+                    <label for="session-state">Session state directory override</label>
+                    <InputText id="session-state" class="terminal-input" @bind-Value="_model.SessionStateDirectory" />
+                </div>
+                <div class="settings-field">
+                    <label for="session-store">Session store database override</label>
+                    <InputText id="session-store" class="terminal-input" @bind-Value="_model.SessionStoreDatabasePath" />
+                </div>
+                <div class="settings-field">
+                    <label for="config-path">Config file override</label>
+                    <InputText id="config-path" class="terminal-input" @bind-Value="_model.ConfigPath" />
+                </div>
+                <div class="settings-field">
+                    <label for="settings-path">Settings file override</label>
+                    <InputText id="settings-path" class="terminal-input" @bind-Value="_model.SettingsPath" />
+                </div>
+                <div class="settings-field">
+                    <label for="history-path">Command history override</label>
+                    <InputText id="history-path" class="terminal-input" @bind-Value="_model.CommandHistoryPath" />
+                </div>
+                <div class="settings-checkbox">
+                    <InputCheckbox id="prefer-terminal" @bind-Value="_model.PreferWindowsTerminal" />
+                    <label for="prefer-terminal">Prefer Windows Terminal for Resume</label>
+                </div>
+            </div>
+
+            <div class="panel-actions">
+                <button type="submit" class="action-button">Save settings</button>
+                <button type="button" class="action-button action-button-muted" @onclick="ReloadAsync">Reload file</button>
+            </div>
+        </EditForm>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Effective runtime paths</div>
+        <div class="kv-grid">
+            <div class="kv-item"><span>Workspace root</span><strong>@GetWorkspaceRoot()</strong></div>
+            <div class="kv-item"><span>User profile</span><strong>@_paths.UserProfile</strong></div>
+            <div class="kv-item"><span>Copilot home</span><strong>@_paths.CopilotHome</strong></div>
+            <div class="kv-item"><span>Session state</span><strong>@_paths.SessionStateDirectory</strong></div>
+            <div class="kv-item"><span>Session store</span><strong>@_paths.SessionStoreDatabasePath</strong></div>
+            <div class="kv-item"><span>Config path</span><strong>@_paths.ConfigPath</strong></div>
+            <div class="kv-item"><span>Settings path</span><strong>@_paths.SettingsPath</strong></div>
+            <div class="kv-item"><span>History path</span><strong>@_paths.CommandHistoryPath</strong></div>
+        </div>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Session categories</div>
+        <p class="panel-copy">
+            Session categories are also stored in <code>@_settingsFilePath</code>. Edit them from the
+            <a href="/sessions">Sessions</a> page, where they drive the grouped tree view.
+        </p>
+        <div class="kv-grid">
+            <div class="kv-item"><span>Stored mappings</span><strong>@_model.SessionCategories.Count</strong></div>
+        </div>
+    </section>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saveSucceeded;
+    private string? _message;
+    private string _settingsFilePath = string.Empty;
+    private CopilotSuiteOptions _model = new();
+    private CopilotPaths _paths = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settingsFilePath = SettingsService.GetSettingsFilePath();
+        await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            await SettingsService.SaveSettingsAsync(_model);
+            await Task.Delay(250);
+            _paths = EnvironmentService.GetPaths();
+            _saveSucceeded = true;
+            _message = "Saved customSettings.json.";
+        }
+        catch (IOException ex)
+        {
+            _saveSucceeded = false;
+            _message = $"Failed to save settings: {ex.Message}";
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _saveSucceeded = false;
+            _message = $"Failed to save settings: {ex.Message}";
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        await LoadAsync();
+        _saveSucceeded = true;
+        _message = "Reloaded settings from customSettings.json.";
+    }
+
+    private async Task LoadAsync()
+    {
+        _model = await SettingsService.GetSettingsAsync();
+        _paths = EnvironmentService.GetPaths();
+    }
+
+    private string GetWorkspaceRoot() => string.IsNullOrWhiteSpace(_model.WorkspaceRootDirectory)
+        ? _model.StartupDirectory ?? "(not set)"
+        : _model.WorkspaceRootDirectory!;
+}

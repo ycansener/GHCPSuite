@@ -1,0 +1,359 @@
+@page "/"
+@inject ICopilotWorkService WorkService
+@inject ICopilotSessionService SessionService
+@inject ICopilotSettingsService SettingsService
+@inject NavigationManager Navigation
+
+<PageTitle>GHCP Suite | Workspaces</PageTitle>
+
+<h1>Workspace selection</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading workspaces...</p>
+}
+else
+{
+    <section class="panel-grid">
+        <article class="panel-card">
+            <div class="panel-label">Workspaces</div>
+            <div class="panel-metric">@_workspaces.Count</div>
+            <div class="panel-copy">Persisted roots that scope Copilot work, sessions, and launch points.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Active workspace</div>
+            <div class="panel-metric">@(_activeWorkspace?.Name ?? "None")</div>
+            <div class="panel-copy">Select one to make it the default context for new GHCP work.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Scoped sessions</div>
+            <div class="panel-metric">@ActiveWorkspaceSessionCount</div>
+            <div class="panel-copy">Known sessions whose working directory falls under the active workspace root.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Active items</div>
+            <div class="panel-metric">@ActiveWorkspaceActiveCount</div>
+            <div class="panel-copy">Sessions currently marked Active inside the selected workspace.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Available folders</div>
+            <div class="panel-metric">@_availableFolders.Count</div>
+            <div class="panel-copy">Existing folders under the workspace root that can be imported.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Ignored folders</div>
+            <div class="panel-metric">@_ignoredFolders.Count</div>
+            <div class="panel-copy">Folders intentionally hidden from workspace selection.</div>
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Choose a workspace</div>
+            <p class="panel-copy">This is now the main entry point. Pick a workspace to keep Copilot sessions tied to one root folder.</p>
+            @if (_workspaces.Count == 0)
+            {
+                <p class="empty-state">No workspaces yet. Create one to start scoped GHCP work.</p>
+            }
+            else
+            {
+                @foreach (var workspace in _workspaces)
+                {
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title"><a href="@GetWorkspaceUrl(workspace)">@workspace.Name</a></div>
+                            @if (!string.IsNullOrWhiteSpace(workspace.Description))
+                            {
+                                <div class="row-description">@workspace.Description</div>
+                            }
+                            <div class="row-meta">@workspace.RootPath</div>
+                        </div>
+                        <div class="row-side row-actions">
+                            <span class="status-pill @(IsActiveWorkspace(workspace) ? "status-live" : "status-idle")">@(IsActiveWorkspace(workspace) ? "Selected" : "Available")</span>
+                            <span>@GetWorkspaceSessionCount(workspace) session(s)</span>
+                            <button type="button" class="action-button action-button-small" @onclick="() => OpenWorkspaceAsync(workspace)">Open</button>
+                        </div>
+                    </div>
+                }
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Create a workspace</div>
+            @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
+            {
+                <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
+            }
+            <p class="panel-copy">New workspaces are created as folders under <code>@(WorkspaceRootDirectory ?? "(set this in Settings first)")</code>.</p>
+            <div class="terminal-form">
+                <label>
+                    <span>Name</span>
+                    <input class="terminal-input" @bind="_newWorkspace.Name" placeholder="GHCP Suite" />
+                </label>
+                <label>
+                    <span>Description</span>
+                    <textarea class="terminal-input work-textarea workspace-textarea" @bind="_newWorkspace.Description" placeholder="What should this workspace track?"></textarea>
+                </label>
+                @if (!string.IsNullOrWhiteSpace(_newWorkspace.Name) && !string.IsNullOrWhiteSpace(WorkspaceRootDirectory))
+                {
+                    <div class="row-meta">Folder preview · @BuildWorkspacePath(_newWorkspace.Name)</div>
+                }
+                <div class="panel-actions">
+                    <button type="button" class="action-button" @onclick="CreateWorkspaceAsync" disabled="@string.IsNullOrWhiteSpace(WorkspaceRootDirectory)">Create workspace</button>
+                    @if (string.IsNullOrWhiteSpace(WorkspaceRootDirectory))
+                    {
+                        <a class="action-button action-button-muted" href="/settings">Set working directory</a>
+                    }
+                </div>
+            </div>
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Available folders</div>
+            <p class="panel-copy">Existing folders under the working directory stay unmanaged until you import them as workspaces.</p>
+            @if (string.IsNullOrWhiteSpace(WorkspaceRootDirectory))
+            {
+                <p class="empty-state">Set a workspace working directory in Settings first.</p>
+            }
+            else if (_availableFolders.Count == 0)
+            {
+                <p class="empty-state">No unmanaged folders found under <code>@WorkspaceRootDirectory</code>.</p>
+            }
+            else
+            {
+                <input class="terminal-input compact-input" @bind="_availableFolderSearch" @bind:event="oninput" placeholder="Search available folders..." />
+                <div class="row-meta">Showing @FilteredAvailableFolders.Count of @AvailableFolderMatchCount matching folder(s)</div>
+                <div class="scroll-list">
+                    @foreach (var folder in FilteredAvailableFolders)
+                    {
+                        <div class="list-row">
+                            <div>
+                                <div class="row-title">@folder.Name</div>
+                                <div class="row-meta">@folder.FullPath</div>
+                            </div>
+                            <div class="row-side row-actions">
+                                <button type="button" class="action-button action-button-small" @onclick="() => ImportFolderAsync(folder.FullPath)">Import</button>
+                                <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => IgnoreFolderAsync(folder.FullPath)">Ignore</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Ignored folders</div>
+            @if (_ignoredFolders.Count == 0)
+            {
+                <p class="empty-state">No ignored folders.</p>
+            }
+            else
+            {
+                <input class="terminal-input compact-input" @bind="_ignoredFolderSearch" @bind:event="oninput" placeholder="Search ignored folders..." />
+                <div class="row-meta">Showing @FilteredIgnoredFolders.Count of @IgnoredFolderMatchCount matching folder(s)</div>
+                <div class="scroll-list">
+                    @foreach (var folder in FilteredIgnoredFolders)
+                    {
+                        <div class="list-row">
+                            <div>
+                                <div class="row-title">@folder.Name</div>
+                                <div class="row-meta">@folder.FullPath</div>
+                            </div>
+                            <div class="row-side row-actions">
+                                <button type="button" class="action-button action-button-small" @onclick="() => UnignoreFolderAsync(folder.FullPath)">Restore</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+
+    @if (_activeWorkspace is not null)
+    {
+        <section class="panel-card">
+            <div class="section-title">Selected workspace</div>
+            <div class="content-grid">
+                <div>
+                    <div class="row-title"><a href="@GetWorkspaceUrl(_activeWorkspace)">@_activeWorkspace.Name</a></div>
+                    @if (!string.IsNullOrWhiteSpace(_activeWorkspace.Description))
+                    {
+                        <div class="row-description">@_activeWorkspace.Description</div>
+                    }
+                    <div class="row-meta">@_activeWorkspace.RootPath</div>
+                </div>
+                <div class="row-side row-actions">
+                    <a class="action-button action-button-small" href="@GetWorkspaceUrl(_activeWorkspace)">Enter workspace</a>
+                    <a class="action-button action-button-small action-button-muted" href="/work">Global work view</a>
+                </div>
+            </div>
+        </section>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
+    private IReadOnlyList<CopilotSessionSummary> _sessions = Array.Empty<CopilotSessionSummary>();
+    private IReadOnlyList<CopilotWorkspaceFolderCandidate> _availableFolders = Array.Empty<CopilotWorkspaceFolderCandidate>();
+    private IReadOnlyList<CopilotWorkspaceFolderCandidate> _ignoredFolders = Array.Empty<CopilotWorkspaceFolderCandidate>();
+    private CopilotWorkspace? _activeWorkspace;
+    private CopilotSuiteOptions _settings = new();
+    private CopilotWorkspace _newWorkspace = new();
+    private string _availableFolderSearch = string.Empty;
+    private string _ignoredFolderSearch = string.Empty;
+    private string? _feedbackMessage;
+    private bool _feedbackSucceeded;
+    private string? WorkspaceRootDirectory => string.IsNullOrWhiteSpace(_settings.WorkspaceRootDirectory)
+        ? _settings.StartupDirectory
+        : _settings.WorkspaceRootDirectory;
+    private IReadOnlyList<CopilotWorkspaceFolderCandidate> FilteredAvailableFolders => FilterFolders(_availableFolders, _availableFolderSearch);
+    private IReadOnlyList<CopilotWorkspaceFolderCandidate> FilteredIgnoredFolders => FilterFolders(_ignoredFolders, _ignoredFolderSearch);
+    private int AvailableFolderMatchCount => CountMatchingFolders(_availableFolders, _availableFolderSearch);
+    private int IgnoredFolderMatchCount => CountMatchingFolders(_ignoredFolders, _ignoredFolderSearch);
+
+    private int ActiveWorkspaceSessionCount => _activeWorkspace is null ? 0 : GetWorkspaceSessionCount(_activeWorkspace);
+
+    private int ActiveWorkspaceActiveCount => _activeWorkspace is null
+        ? 0
+        : _sessions.Count(session =>
+            CopilotWorkService.WorkspaceMatches(_activeWorkspace, session.WorkingDirectory)
+            && string.Equals(session.WorkflowStatus, "Active", StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _settings = await SettingsService.GetSettingsAsync();
+        _workspaces = await WorkService.GetWorkspacesAsync();
+        _activeWorkspace = await WorkService.GetActiveWorkspaceAsync();
+        _sessions = await SessionService.GetSessionsAsync();
+        _availableFolders = await WorkService.GetAvailableWorkspaceFoldersAsync();
+        _ignoredFolders = await WorkService.GetIgnoredWorkspaceFoldersAsync();
+        _loading = false;
+    }
+
+    private async Task OpenWorkspaceAsync(CopilotWorkspace workspace)
+    {
+        await WorkService.SetActiveWorkspaceAsync(workspace.Id);
+        Navigation.NavigateTo(GetWorkspaceUrl(workspace));
+    }
+
+    private async Task CreateWorkspaceAsync()
+    {
+        var name = _newWorkspace.Name.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = "A workspace name is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(WorkspaceRootDirectory))
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = "Choose a workspace working directory in Settings first.";
+            return;
+        }
+
+        var rootPath = WorkspaceRootDirectory!;
+        Directory.CreateDirectory(rootPath);
+        var workspacePath = BuildWorkspacePath(name);
+        Directory.CreateDirectory(workspacePath);
+
+        if (!Directory.Exists(workspacePath))
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = $"Failed to create the workspace folder at {workspacePath}.";
+            return;
+        }
+
+        var workspace = new CopilotWorkspace
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = name,
+            RootPath = workspacePath,
+            Description = string.IsNullOrWhiteSpace(_newWorkspace.Description) ? null : _newWorkspace.Description.Trim()
+        };
+
+        await WorkService.SaveWorkspaceAsync(workspace);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"Created workspace {workspace.Name}.";
+        _newWorkspace = new CopilotWorkspace();
+        await LoadAsync();
+        Navigation.NavigateTo(GetWorkspaceUrl(workspace));
+    }
+
+    private async Task ImportFolderAsync(string folderPath)
+    {
+        var workspace = await WorkService.ImportWorkspaceFolderAsync(folderPath);
+        if (workspace is null)
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = $"Could not import {folderPath}.";
+            return;
+        }
+
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"Imported {workspace.Name} as a workspace.";
+        await LoadAsync();
+        Navigation.NavigateTo(GetWorkspaceUrl(workspace));
+    }
+
+    private async Task IgnoreFolderAsync(string folderPath)
+    {
+        await WorkService.IgnoreWorkspaceFolderAsync(folderPath);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"Ignored {Path.GetFileName(folderPath)}.";
+        await LoadAsync();
+    }
+
+    private async Task UnignoreFolderAsync(string folderPath)
+    {
+        await WorkService.UnignoreWorkspaceFolderAsync(folderPath);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"Restored {Path.GetFileName(folderPath)} to available folders.";
+        await LoadAsync();
+    }
+
+    private int GetWorkspaceSessionCount(CopilotWorkspace workspace) =>
+        _sessions.Count(session => CopilotWorkService.WorkspaceMatches(workspace, session.WorkingDirectory));
+
+    private bool IsActiveWorkspace(CopilotWorkspace workspace) =>
+        _activeWorkspace is not null && string.Equals(_activeWorkspace.Id, workspace.Id, StringComparison.OrdinalIgnoreCase);
+
+    private static string GetWorkspaceUrl(CopilotWorkspace workspace) => $"/workspaces/{Uri.EscapeDataString(workspace.Id)}";
+
+    private string BuildWorkspacePath(string workspaceName)
+    {
+        var safeName = string.Concat(workspaceName.Trim().Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character))
+            .Trim();
+        var folderName = string.IsNullOrWhiteSpace(safeName) ? "workspace" : safeName;
+        return Path.Combine(WorkspaceRootDirectory!, folderName);
+    }
+
+    private static IReadOnlyList<CopilotWorkspaceFolderCandidate> FilterFolders(IReadOnlyList<CopilotWorkspaceFolderCandidate> folders, string searchText) =>
+        folders
+            .Where(folder => MatchesFolder(folder, searchText))
+            .Take(8)
+            .ToArray();
+
+    private static int CountMatchingFolders(IReadOnlyList<CopilotWorkspaceFolderCandidate> folders, string searchText) =>
+        folders.Count(folder => MatchesFolder(folder, searchText));
+
+    private static bool MatchesFolder(CopilotWorkspaceFolderCandidate folder, string searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return true;
+        }
+
+        return folder.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || folder.FullPath.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+    }
+}

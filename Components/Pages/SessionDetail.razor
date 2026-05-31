@@ -1,0 +1,582 @@
+@page "/sessions/{SessionId}"
+@inject ICopilotSessionService SessionService
+@inject ICopilotResumeService ResumeService
+@inject ICopilotSettingsService SettingsService
+@inject ICopilotConfigEditorService ConfigEditorService
+@inject ICopilotWorkService WorkService
+
+<PageTitle>GHCP Suite | Session</PageTitle>
+
+<h1>Session</h1>
+
+@if (_loading)
+{
+    <p class="empty-state">Loading session detail...</p>
+}
+else if (_detail is null || _workDraft is null)
+{
+    <p class="empty-state">Session not found.</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-title">@_detail.Summary.Name</div>
+        @if (!string.IsNullOrWhiteSpace(_detail.Summary.Description))
+        {
+            <p class="row-description">@_detail.Summary.Description</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
+        {
+            <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
+        }
+        <div class="kv-grid">
+            <div class="kv-item"><span>Session id</span><strong>@_detail.Summary.SessionId</strong></div>
+            <div class="kv-item"><span>Project</span><strong>@(_detail.Summary.Project ?? "No project")</strong></div>
+            <div class="kv-item"><span>Workflow</span><strong>@_detail.Summary.WorkflowStatus</strong></div>
+            <div class="kv-item"><span>Priority</span><strong>@_detail.Summary.Priority</strong></div>
+            <div class="kv-item"><span>Category</span><strong>@(_detail.Summary.Category ?? UncategorizedLabel)</strong></div>
+            <div class="kv-item"><span>Open tasks</span><strong>@_detail.Summary.OpenTaskCount</strong></div>
+            <div class="kv-item"><span>Completed tasks</span><strong>@_detail.Summary.CompletedTaskCount</strong></div>
+            <div class="kv-item"><span>Working directory</span><strong>@_detail.Summary.WorkingDirectory</strong></div>
+            <div class="kv-item"><span>Updated</span><strong>@FormatDate(_detail.Summary.UpdatedAt)</strong></div>
+            <div class="kv-item"><span>Session folder</span><strong>@_detail.SessionDirectory</strong></div>
+        </div>
+        <div class="panel-actions">
+            <div class="category-editor detail-category-editor">
+                <select class="terminal-input category-select"
+                        value="@_categorySelection"
+                        @onchange="e => UpdateCategorySelection(e.Value?.ToString())">
+                    <option value="">@UncategorizedLabel</option>
+                    @foreach (var category in _knownCategories)
+                    {
+                        <option value="@category">@category</option>
+                    }
+                    <option value="@CustomCategoryValue">Custom category...</option>
+                </select>
+                @if (ShouldShowCustomCategoryInput)
+                {
+                    <input class="terminal-input category-input"
+                           placeholder="Type a category"
+                           value="@_categoryDraft"
+                           @oninput="e => _categoryDraft = e.Value?.ToString() ?? string.Empty" />
+                }
+                <div class="inline-actions category-actions">
+                    <button type="button" class="action-button action-button-small" @onclick="SaveCategoryAsync">Save</button>
+                    <button type="button" class="action-button action-button-small action-button-muted" @onclick="ClearCategoryAsync">Clear</button>
+                </div>
+            </div>
+        </div>
+        <div class="panel-actions inline-actions">
+            <button type="button" class="action-button" @onclick="ResumeAsync">Resume in Terminal</button>
+            <button type="button" class="action-button action-button-muted" @onclick="SaveWorkAsync">Save work data</button>
+        </div>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Workflow</div>
+            <div class="settings-grid">
+                <div class="settings-field">
+                    <label>Project</label>
+                    <input class="terminal-input" @bind="_workDraft.Project" />
+                </div>
+                <div class="settings-field">
+                    <label>Status</label>
+                    <select class="terminal-input" @bind="_workDraft.Status">
+                        @foreach (var status in WorkflowStatuses)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </div>
+                <div class="settings-field">
+                    <label>Priority</label>
+                    <select class="terminal-input" @bind="_workDraft.Priority">
+                        @foreach (var priority in Priorities)
+                        {
+                            <option value="@priority">@priority</option>
+                        }
+                    </select>
+                </div>
+                <div class="settings-field">
+                    <label>Next action</label>
+                    <input class="terminal-input" @bind="_workDraft.NextAction" placeholder="What should happen next?" />
+                </div>
+                <div class="settings-field">
+                    <label>Template</label>
+                    <div class="inline-filter-row">
+                        <select class="terminal-input compact-input" @bind="_selectedTemplateId">
+                            <option value="">Choose a template</option>
+                            @foreach (var template in _templates)
+                            {
+                                <option value="@template.Id">@template.Name</option>
+                            }
+                        </select>
+                        <button type="button" class="action-button action-button-small" @onclick="ApplyTemplateAsync">Apply</button>
+                    </div>
+                </div>
+            </div>
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Tasks</div>
+            <div class="settings-grid">
+                <div class="settings-field">
+                    <label>Task title</label>
+                    <input class="terminal-input" @bind="_newTaskTitle" placeholder="Add a task for this session" />
+                </div>
+                <div class="settings-field">
+                    <label>Status</label>
+                    <select class="terminal-input" @bind="_newTaskStatus">
+                        @foreach (var taskStatus in TaskStatuses)
+                        {
+                            <option value="@taskStatus">@taskStatus</option>
+                        }
+                    </select>
+                </div>
+                <div class="settings-field">
+                    <label>Depends on</label>
+                    <select class="terminal-input" @bind="_newTaskDependsOn">
+                        <option value="">No dependency</option>
+                        @foreach (var task in _workDraft.Tasks)
+                        {
+                            <option value="@task.Id">@task.Title</option>
+                        }
+                    </select>
+                </div>
+                <div class="settings-field">
+                    <label>Carry forward</label>
+                    <div class="settings-checkbox">
+                        <input type="checkbox" @bind="_newTaskCarryForward" />
+                        <label>Keep this task visible across follow-up work</label>
+                    </div>
+                </div>
+            </div>
+            <div class="panel-actions inline-actions">
+                <button type="button" class="action-button action-button-small" @onclick="AddTask">Add task</button>
+            </div>
+
+            @if (_workDraft.Tasks.Count == 0)
+            {
+                <p class="empty-state">No tracked tasks yet.</p>
+            }
+            else
+            {
+                <div class="table-shell">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Task</th>
+                                <th>Status</th>
+                                <th>Dependency</th>
+                                <th>Carry</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var task in _workDraft.Tasks)
+                            {
+                                <tr>
+                                    <td>@task.Title</td>
+                                    <td>
+                                        <select class="terminal-input compact-input" @bind="task.Status">
+                                            @foreach (var taskStatus in TaskStatuses)
+                                            {
+                                                <option value="@taskStatus">@taskStatus</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select class="terminal-input compact-input" @bind="task.DependsOnTaskId">
+                                            <option value="">None</option>
+                                            @foreach (var dependency in _workDraft.Tasks.Where(candidate => candidate.Id != task.Id))
+                                            {
+                                                <option value="@dependency.Id">@dependency.Title</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input type="checkbox" @bind="task.CarryForward" />
+                                    </td>
+                                    <td>
+                                        <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => RemoveTask(task.Id)">Remove</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Notes and decision log</div>
+            <div class="settings-grid">
+                <div class="settings-field">
+                    <label>Decisions</label>
+                    <textarea class="terminal-input work-textarea" @bind="_workDraft.Decisions"></textarea>
+                </div>
+                <div class="settings-field">
+                    <label>Blockers</label>
+                    <textarea class="terminal-input work-textarea" @bind="_workDraft.Blockers"></textarea>
+                </div>
+                <div class="settings-field">
+                    <label>Next steps</label>
+                    <textarea class="terminal-input work-textarea" @bind="_workDraft.NextSteps"></textarea>
+                </div>
+                <div class="settings-field">
+                    <label>Outcome</label>
+                    <textarea class="terminal-input work-textarea" @bind="_workDraft.Outcome"></textarea>
+                </div>
+            </div>
+            <div class="panel-actions">
+                <button type="button" class="action-button action-button-small" @onclick="SaveWorkAsync">Save notes and workflow</button>
+            </div>
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Session files</div>
+            <div class="row-meta">@_detail.SessionDirectory</div>
+            @if (_detail.SessionEntries.Count == 0)
+            {
+                <p class="empty-state">No files or folders were found under this session directory.</p>
+            }
+            else
+            {
+                <div class="session-tree">
+                    @foreach (var entry in _detail.SessionEntries)
+                    {
+                        <div class="session-tree-item" style="@GetTreeIndentStyle(entry.Depth)">
+                            <a href="#"
+                               class="session-entry-link @(entry.IsDirectory ? "session-entry-directory" : "session-entry-file")"
+                               title="Open @entry.RelativePath"
+                               @onclick:preventDefault="true"
+                               @onclick="() => OpenSessionEntry(entry)">
+                                @entry.Name@(entry.IsDirectory ? "\\" : string.Empty)
+                            </a>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Workspace</div>
+            <pre class="terminal-output file-preview">@(_detail.WorkspaceContent ?? "No workspace.yaml found.")</pre>
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Plan</div>
+            <pre class="terminal-output file-preview">@(_detail.PlanContent ?? "No plan.md found.")</pre>
+        </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Checkpoint index</div>
+            <pre class="terminal-output file-preview">@(_detail.CheckpointIndexContent ?? "No checkpoint index found.")</pre>
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Recent events</div>
+            <pre class="terminal-output file-preview">@(string.Join(Environment.NewLine, _detail.RecentEvents))</pre>
+        </article>
+    </section>
+}
+
+@code {
+    private const string UncategorizedLabel = "Uncategorized";
+    private const string CustomCategoryValue = "__custom__";
+    private static readonly string[] WorkflowStatuses = ["Planned", "Active", "Blocked", "Done"];
+    private static readonly string[] Priorities = ["Low", "Normal", "High", "Critical"];
+    private static readonly string[] TaskStatuses = ["Pending", "In Progress", "Blocked", "Done"];
+
+    [Parameter] public string SessionId { get; set; } = string.Empty;
+
+    private bool _loading = true;
+    private CopilotSessionDetail? _detail;
+    private CopilotSessionWorkItem? _workDraft;
+    private IReadOnlyList<CopilotWorkTemplate> _templates = Array.Empty<CopilotWorkTemplate>();
+    private string _selectedTemplateId = string.Empty;
+    private string _newTaskTitle = string.Empty;
+    private string _newTaskStatus = "Pending";
+    private string _newTaskDependsOn = string.Empty;
+    private bool _newTaskCarryForward;
+    private string _categorySelection = string.Empty;
+    private string _categoryDraft = string.Empty;
+    private IReadOnlyList<string> _knownCategories = Array.Empty<string>();
+    private string? _feedbackMessage;
+    private bool _feedbackSucceeded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _detail = await SessionService.GetSessionAsync(SessionId);
+        _workDraft = _detail is null ? null : CloneWorkItem(_detail.WorkItem);
+        _templates = await WorkService.GetTemplatesAsync();
+        _knownCategories = (await SettingsService.GetSessionCategoriesAsync())
+            .Values
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(category => category, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        ApplyCategoryState(_detail?.Summary.Category);
+        _loading = false;
+    }
+
+    private async Task ResumeAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var result = ResumeService.ResumeSession(_detail.Summary);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "session-resume",
+                Title = $"Resumed {_detail.Summary.Name}",
+                SessionId = _detail.Summary.SessionId,
+                SessionName = _detail.Summary.Name,
+                Project = _detail.Summary.Project
+            });
+        }
+    }
+
+    private async Task OpenSessionEntry(CopilotSessionFolderEntry entry)
+    {
+        var result = ConfigEditorService.OpenPath(entry.FullPath, entry.RelativePath);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded && _detail is not null)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "file-open",
+                Title = $"Opened {entry.RelativePath}",
+                SessionId = _detail.Summary.SessionId,
+                SessionName = _detail.Summary.Name,
+                Project = _detail.Summary.Project,
+                FilePath = entry.RelativePath
+            });
+        }
+    }
+
+    private async Task SaveCategoryAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var category = GetSelectedCategoryValue();
+        await SettingsService.SaveSessionCategoryAsync(_detail.Summary.SessionId, category);
+        _detail = _detail with
+        {
+            Summary = _detail.Summary with { Category = category }
+        };
+        _knownCategories = _knownCategories
+            .Append(category)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray()!;
+        ApplyCategoryState(category);
+        _feedbackSucceeded = true;
+        _feedbackMessage = category is null
+            ? $"Moved {_detail.Summary.Name} to {UncategorizedLabel}."
+            : $"Saved category '{category}' for {_detail.Summary.Name}.";
+    }
+
+    private async Task ClearCategoryAsync()
+    {
+        _categorySelection = string.Empty;
+        _categoryDraft = string.Empty;
+        await SaveCategoryAsync();
+    }
+
+    private void AddTask()
+    {
+        if (_workDraft is null || string.IsNullOrWhiteSpace(_newTaskTitle))
+        {
+            return;
+        }
+
+        _workDraft.Tasks.Add(new CopilotSessionTaskItem
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Title = _newTaskTitle.Trim(),
+            Status = _newTaskStatus,
+            DependsOnTaskId = string.IsNullOrWhiteSpace(_newTaskDependsOn) ? null : _newTaskDependsOn,
+            CarryForward = _newTaskCarryForward,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+
+        _newTaskTitle = string.Empty;
+        _newTaskStatus = "Pending";
+        _newTaskDependsOn = string.Empty;
+        _newTaskCarryForward = false;
+    }
+
+    private void RemoveTask(string taskId)
+    {
+        if (_workDraft is null)
+        {
+            return;
+        }
+
+        _workDraft.Tasks = _workDraft.Tasks
+            .Where(task => !string.Equals(task.Id, taskId, StringComparison.OrdinalIgnoreCase))
+            .Select(task =>
+            {
+                if (string.Equals(task.DependsOnTaskId, taskId, StringComparison.OrdinalIgnoreCase))
+                {
+                    task.DependsOnTaskId = null;
+                }
+
+                return task;
+            })
+            .ToList();
+    }
+
+    private async Task ApplyTemplateAsync()
+    {
+        if (_detail is null || string.IsNullOrWhiteSpace(_selectedTemplateId))
+        {
+            return;
+        }
+
+        await WorkService.ApplyTemplateAsync(_detail.Summary.SessionId, _selectedTemplateId);
+        await WorkService.RecordActivityAsync(new CopilotActivityEntry
+        {
+            Type = "template-apply",
+            Title = $"Applied template to {_detail.Summary.Name}",
+            SessionId = _detail.Summary.SessionId,
+            SessionName = _detail.Summary.Name,
+            Project = _detail.Summary.Project
+        });
+        await LoadAsync();
+        _feedbackSucceeded = true;
+        _feedbackMessage = "Applied the selected template.";
+    }
+
+    private async Task SaveWorkAsync()
+    {
+        if (_detail is null || _workDraft is null)
+        {
+            return;
+        }
+
+        foreach (var task in _workDraft.Tasks)
+        {
+            task.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        await WorkService.SaveSessionWorkAsync(_detail.Summary.SessionId, _workDraft);
+        await WorkService.RecordActivityAsync(new CopilotActivityEntry
+        {
+            Type = "work-save",
+            Title = $"Updated work tracking for {_detail.Summary.Name}",
+            SessionId = _detail.Summary.SessionId,
+            SessionName = _detail.Summary.Name,
+            Project = NormalizeBlank(_workDraft.Project) ?? _detail.Summary.Project
+        });
+        await WorkService.RecordActivityAsync(new CopilotActivityEntry
+        {
+            Type = "note-save",
+            Title = $"Saved notes for {_detail.Summary.Name}",
+            SessionId = _detail.Summary.SessionId,
+            SessionName = _detail.Summary.Name,
+            Project = NormalizeBlank(_workDraft.Project) ?? _detail.Summary.Project
+        });
+
+        await LoadAsync();
+        _feedbackSucceeded = true;
+        _feedbackMessage = "Saved workflow, tasks, and notes.";
+    }
+
+    private bool ShouldShowCustomCategoryInput =>
+        string.Equals(_categorySelection, CustomCategoryValue, StringComparison.Ordinal);
+
+    private void UpdateCategorySelection(string? value)
+    {
+        _categorySelection = value ?? string.Empty;
+
+        if (!ShouldShowCustomCategoryInput)
+        {
+            _categoryDraft = _categorySelection;
+        }
+    }
+
+    private void ApplyCategoryState(string? category)
+    {
+        var normalized = NormalizeCategory(category);
+        _categoryDraft = normalized ?? string.Empty;
+        _categorySelection = ResolveCategorySelection(normalized);
+    }
+
+    private string? GetSelectedCategoryValue() =>
+        ShouldShowCustomCategoryInput
+            ? NormalizeCategory(_categoryDraft)
+            : NormalizeCategory(_categorySelection);
+
+    private string ResolveCategorySelection(string? category)
+    {
+        if (category is null)
+        {
+            return string.Empty;
+        }
+
+        return _knownCategories.Contains(category, StringComparer.OrdinalIgnoreCase)
+            ? category
+            : CustomCategoryValue;
+    }
+
+    private static string? NormalizeCategory(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? NormalizeBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static CopilotSessionWorkItem CloneWorkItem(CopilotSessionWorkItem source) => new()
+    {
+        Project = source.Project,
+        Status = source.Status,
+        Priority = source.Priority,
+        NextAction = source.NextAction,
+        Decisions = source.Decisions,
+        Blockers = source.Blockers,
+        NextSteps = source.NextSteps,
+        Outcome = source.Outcome,
+        Tasks = source.Tasks.Select(task => new CopilotSessionTaskItem
+        {
+            Id = task.Id,
+            Title = task.Title,
+            Status = task.Status,
+            DependsOnTaskId = task.DependsOnTaskId,
+            CarryForward = task.CarryForward,
+            CreatedAt = task.CreatedAt,
+            UpdatedAt = task.UpdatedAt
+        }).ToList()
+    };
+
+    private static string GetTreeIndentStyle(int depth) => $"padding-left: {depth * 1.2:0.##}rem;";
+
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
+}
