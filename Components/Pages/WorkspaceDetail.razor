@@ -1,6 +1,9 @@
 @page "/workspaces/{WorkspaceId}"
 @inject ICopilotWorkService WorkService
 @inject ICopilotTickerService TickerService
+@inject ICopilotAgentCatalogService AgentCatalogService
+@inject ICopilotWorkspaceAgentService WorkspaceAgentService
+@inject ICopilotAgentRunService AgentRunService
 @inject ICopilotWorkspaceLaunchService WorkspaceLaunchService
 @inject ICopilotResumeService ResumeService
 @inject ICopilotConfigEditorService ConfigEditorService
@@ -37,9 +40,9 @@ else
             <div class="panel-copy">@_snapshot.Telemetry.EnabledTickers enabled recurring tasks.</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Agents used</div>
-            <div class="panel-metric">@_snapshot.AgentsUsed.Count</div>
-            <div class="panel-copy">Agents run directly or referenced by workspace tickers.</div>
+            <div class="panel-label">Workspace agents</div>
+            <div class="panel-metric">@_workspaceAgents.Count</div>
+            <div class="panel-copy">Workspace-local agent clones managed under <code>.ghcpsuite\agents</code>.</div>
         </article>
         <article class="panel-card">
             <div class="panel-label">Time spent</div>
@@ -60,11 +63,13 @@ else
                     <div class="row-description">@_snapshot.Workspace.Description</div>
                 }
                 <div class="row-meta">Workspace root · @_snapshot.Workspace.RootPath</div>
+                <div class="row-meta">Suite data · @CopilotWorkspaceStorage.GetSuiteRoot(_snapshot.Workspace.RootPath)</div>
             </div>
             <div class="row-side row-actions">
                 <button type="button" class="action-button" @onclick="StartWorkspaceSessionAsync">Start GHCP session</button>
                 <button type="button" class="action-button action-button-muted" @onclick="OpenCreateTicker">Create ticker</button>
                 <button type="button" class="action-button action-button-muted" @onclick="OpenWorkspaceFolderAsync">Open folder</button>
+                <button type="button" class="action-button action-button-muted" @onclick="OpenWorkspaceSuiteFolderAsync">Open suite folder</button>
                 <a class="action-button action-button-muted" href="/dashboards?workspaceId=@Uri.EscapeDataString(_snapshot.Workspace.Id)">Workspace dashboard</a>
                 <a class="action-button action-button-muted" href="/work">Global work</a>
             </div>
@@ -122,7 +127,9 @@ else
                             </div>
                             <div class="row-side row-actions">
                                 <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
-                                <button type="button" class="action-button action-button-small" @onclick="() => RunTickerAsync(ticker.Id)">Run now</button>
+                                <button type="button" class="action-button action-button-small" @onclick="() => RunTickerAsync(ticker)">Run now</button>
+                                <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => EditTickerAsync(ticker.Id)">Edit</button>
+                                <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ToggleTickerAsync(ticker)">@((ticker.Enabled ? "Disable" : "Enable"))</button>
                             </div>
                         </div>
                     }    
@@ -132,6 +139,33 @@ else
     </section>
 
     <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Workspace agents</div>
+            @if (_workspaceAgents.Count == 0)
+            {
+                <p class="empty-state">No workspace-cloned agents yet. Clone one from the global Agents page to customize it for this workspace.</p>
+            }
+            else
+            {
+                @foreach (var agent in _workspaceAgents)
+                {
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title"><a href="/agents/@Uri.EscapeDataString(agent.Id)">@agent.DisplayName</a></div>
+                            <div class="row-description">@agent.Description</div>
+                            <div class="row-meta">@agent.Name · @agent.DefinitionPath</div>
+                        </div>
+                        <div class="row-side row-actions">
+                            <span class="status-pill @(agent.Enabled ? "status-live" : "status-idle")">@(agent.Enabled ? "Enabled" : "Disabled")</span>
+                            <button type="button" class="action-button action-button-small" @onclick="() => RunWorkspaceAgentAsync(agent)">Run</button>
+                            <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => EditWorkspaceAgentAsync(agent)">Modify</button>
+                            <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ToggleWorkspaceAgentAsync(agent)">@((agent.Enabled ? "Disable" : "Enable"))</button>
+                        </div>
+                    </div>
+                }
+            }
+        </article>
+
         <article class="panel-card">
             <div class="section-title">Agents used</div>
             @if (_snapshot.AgentsUsed.Count == 0)
@@ -154,27 +188,27 @@ else
                 }
             }
         </article>
+    </section>
 
-        <article class="panel-card">
-            <div class="section-title">Recent activity</div>
-            @if (_snapshot.RecentActivity.Count == 0)
-            {
-                <p class="empty-state">No recorded activity for this workspace yet.</p>
-            }
-            else
-            {
-                <div class="timeline-list">
-                    @foreach (var entry in _snapshot.RecentActivity)
-                    {
-                        <div class="timeline-item">
-                            <div class="timeline-meta">@FormatDate(entry.Timestamp) · @FormatActivityType(entry.Type)</div>
-                            <div class="row-title">@entry.Title</div>
-                            <div class="row-meta">@FormatActivityContext(entry)</div>
-                        </div>
-                    }
-                </div>
-            }
-        </article>
+    <section class="panel-card">
+        <div class="section-title">Recent activity</div>
+        @if (_snapshot.RecentActivity.Count == 0)
+        {
+            <p class="empty-state">No recorded activity for this workspace yet.</p>
+        }
+        else
+        {
+            <div class="timeline-list">
+                @foreach (var entry in _snapshot.RecentActivity)
+                {
+                    <div class="timeline-item">
+                        <div class="timeline-meta">@FormatDate(entry.Timestamp) · @FormatActivityType(entry.Type)</div>
+                        <div class="row-title">@entry.Title</div>
+                        <div class="row-meta">@FormatActivityContext(entry)</div>
+                    </div>
+                }
+            </div>
+        }
     </section>
 
     <section class="panel-card">
@@ -227,6 +261,7 @@ else
 
     private bool _loading = true;
     private CopilotWorkspaceSnapshot? _snapshot;
+    private IReadOnlyList<CopilotDefinedAgent> _workspaceAgents = Array.Empty<CopilotDefinedAgent>();
     private string _workspaceFileSearch = string.Empty;
     private string _workspaceFileMode = "all";
     private string? _feedbackMessage;
@@ -242,7 +277,7 @@ else
     protected override async Task OnParametersSetAsync()
     {
         _loading = true;
-        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        await ReloadWorkspaceAsync();
         if (_snapshot is not null)
         {
             await WorkService.SetActiveWorkspaceAsync(_snapshot.Workspace.Id);
@@ -271,7 +306,7 @@ else
                 Project = _snapshot.Workspace.Name,
                 FilePath = _snapshot.Workspace.RootPath
             });
-            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+            await ReloadWorkspaceAsync();
         }
     }
 
@@ -295,7 +330,33 @@ else
                 Project = _snapshot.Workspace.Name,
                 FilePath = _snapshot.Workspace.RootPath
             });
-            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+            await ReloadWorkspaceAsync();
+        }
+    }
+
+    private async Task OpenWorkspaceSuiteFolderAsync()
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        CopilotWorkspaceStorage.EnsureWorkspaceStructure(_snapshot.Workspace.RootPath);
+        var suiteRoot = CopilotWorkspaceStorage.GetSuiteRoot(_snapshot.Workspace.RootPath);
+        var result = ConfigEditorService.OpenPath(suiteRoot, $"{_snapshot.Workspace.Name} suite folder");
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "workspace-open",
+                Title = $"Opened {_snapshot.Workspace.Name} suite folder",
+                Project = _snapshot.Workspace.Name,
+                FilePath = suiteRoot
+            });
+            await ReloadWorkspaceAsync();
         }
     }
 
@@ -315,7 +376,7 @@ else
                 SessionName = session.Name,
                 Project = _snapshot?.Workspace.Name
             });
-            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+            await ReloadWorkspaceAsync();
         }
     }
 
@@ -329,12 +390,85 @@ else
         Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(_snapshot.Workspace.Id)}");
     }
 
-    private async Task RunTickerAsync(string tickerId)
+    private async Task RunTickerAsync(CopilotTickerDefinition ticker)
     {
-        await TickerService.QueueTickerRunAsync(tickerId);
+        if (!ticker.Enabled)
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = $"{ticker.Name} is disabled. Enable it before running.";
+            return;
+        }
+
+        await TickerService.QueueTickerRunAsync(ticker.Id);
         _feedbackSucceeded = true;
         _feedbackMessage = "Ticker queued.";
-        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        await ReloadWorkspaceAsync();
+    }
+
+    private Task EditTickerAsync(string tickerId)
+    {
+        Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(WorkspaceId)}&edit={Uri.EscapeDataString(tickerId)}");
+        return Task.CompletedTask;
+    }
+
+    private async Task ToggleTickerAsync(CopilotTickerDefinition ticker)
+    {
+        await TickerService.SetTickerEnabledAsync(ticker.Id, !ticker.Enabled);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"{ticker.Name} {(!ticker.Enabled ? "enabled" : "disabled")}.";
+        await ReloadWorkspaceAsync();
+    }
+
+    private async Task RunWorkspaceAgentAsync(CopilotDefinedAgent agent)
+    {
+        var result = await AgentRunService.RunAgentAsync(agent);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "agent-run",
+                Title = $"Ran {agent.DisplayName}",
+                AgentName = agent.Name,
+                Project = _snapshot?.Workspace.Name
+            });
+            await ReloadWorkspaceAsync();
+        }
+    }
+
+    private async Task EditWorkspaceAgentAsync(CopilotDefinedAgent agent)
+    {
+        var result = ConfigEditorService.OpenPath(agent.FullPath, agent.DisplayName);
+        _feedbackSucceeded = result.Succeeded;
+        _feedbackMessage = result.Message;
+
+        if (result.Succeeded)
+        {
+            await WorkService.RecordActivityAsync(new CopilotActivityEntry
+            {
+                Type = "config-open",
+                Title = $"Opened {agent.DisplayName}",
+                AgentName = agent.Name,
+                Project = _snapshot?.Workspace.Name,
+                FilePath = agent.FullPath
+            });
+            await ReloadWorkspaceAsync();
+        }
+    }
+
+    private async Task ToggleWorkspaceAgentAsync(CopilotDefinedAgent agent)
+    {
+        if (string.IsNullOrWhiteSpace(agent.WorkspaceAgentId))
+        {
+            return;
+        }
+
+        await WorkspaceAgentService.SetWorkspaceAgentEnabledAsync(agent.WorkspaceAgentId, !agent.Enabled);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"{agent.DisplayName} {(!agent.Enabled ? "enabled" : "disabled")} for {_snapshot?.Workspace.Name}.";
+        await ReloadWorkspaceAsync();
     }
 
     private async Task OpenWorkspaceEntryAsync(CopilotSessionFolderEntry entry)
@@ -352,8 +486,25 @@ else
                 Project = _snapshot?.Workspace.Name,
                 FilePath = entry.FullPath
             });
-            _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+            await ReloadWorkspaceAsync();
         }
+    }
+
+    private async Task ReloadWorkspaceAsync()
+    {
+        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(WorkspaceId);
+        if (_snapshot is null)
+        {
+            _workspaceAgents = Array.Empty<CopilotDefinedAgent>();
+            return;
+        }
+
+        var agents = await AgentCatalogService.GetDefinedAgentsAsync();
+        _workspaceAgents = agents
+            .Where(agent =>
+                agent.IsWorkspaceScoped &&
+                string.Equals(agent.WorkspaceId, _snapshot.Workspace.Id, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
     }
 
     private static string FormatActivityType(string type) => type switch

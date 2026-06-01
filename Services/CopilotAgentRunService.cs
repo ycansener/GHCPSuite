@@ -8,25 +8,32 @@ namespace GHCP.Suite.Services;
 
 public interface ICopilotAgentRunService
 {
-    CopilotAgentLaunchResult RunAgent(CopilotDefinedAgent agent);
+    Task<CopilotAgentLaunchResult> RunAgentAsync(CopilotDefinedAgent agent, CancellationToken cancellationToken = default);
 }
 
 public sealed class CopilotAgentRunService(
     IOptionsMonitor<CopilotSuiteOptions> options,
-    ICopilotEnvironmentService environmentService) : ICopilotAgentRunService
+    ICopilotEnvironmentService environmentService,
+    ICopilotWorkspaceAgentService workspaceAgentService,
+    ICopilotWorkService workService) : ICopilotAgentRunService
 {
     private readonly string _copilotCommandPath = ResolveCopilotCommandPath();
     private readonly string _powerShellCommandPath = ResolvePowerShellCommandPath();
     private readonly string? _windowsTerminalPath = ResolveWindowsTerminalPath();
 
-    public CopilotAgentLaunchResult RunAgent(CopilotDefinedAgent agent)
+    public async Task<CopilotAgentLaunchResult> RunAgentAsync(CopilotDefinedAgent agent, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(agent.Name))
         {
             return new CopilotAgentLaunchResult(false, "This agent cannot be run because it has no name.");
         }
 
-        var workingDirectory = ResolveWorkingDirectory(options.CurrentValue.StartupDirectory, environmentService.GetPaths().CopilotHome);
+        if (agent.IsWorkspaceScoped && !agent.Enabled)
+        {
+            return new CopilotAgentLaunchResult(false, $"{agent.DisplayName} is disabled for {agent.WorkspaceName ?? "this workspace"}.");
+        }
+
+        var workingDirectory = await ResolveWorkingDirectoryAsync(agent, cancellationToken);
         var commandPath = EscapePowerShellSingleQuoted(_copilotCommandPath);
         var agentName = EscapePowerShellSingleQuoted(agent.Name);
         var script = $"Set-Location -LiteralPath '{EscapePowerShellSingleQuoted(workingDirectory)}'; & '{commandPath}' --agent='{agentName}'";
@@ -81,7 +88,31 @@ public sealed class CopilotAgentRunService(
         };
     }
 
-    private static string ResolveWorkingDirectory(string? startupDirectory, string copilotHome)
+    private async Task<string> ResolveWorkingDirectoryAsync(CopilotDefinedAgent agent, CancellationToken cancellationToken)
+    {
+        var paths = environmentService.GetPaths();
+
+        if (agent.IsWorkspaceScoped)
+        {
+            if (!string.IsNullOrWhiteSpace(agent.WorkspaceAgentId))
+            {
+                await workspaceAgentService.SynchronizeWorkspaceAgentAsync(agent.WorkspaceAgentId, cancellationToken);
+            }
+
+            if (!string.IsNullOrWhiteSpace(agent.WorkspaceId))
+            {
+                var workspace = await workService.GetWorkspaceAsync(agent.WorkspaceId, cancellationToken);
+                if (workspace is not null && Directory.Exists(workspace.RootPath))
+                {
+                    return workspace.RootPath;
+                }
+            }
+        }
+
+        return ResolveFallbackWorkingDirectory(options.CurrentValue.StartupDirectory, paths.CopilotHome);
+    }
+
+    private static string ResolveFallbackWorkingDirectory(string? startupDirectory, string copilotHome)
     {
         if (!string.IsNullOrWhiteSpace(startupDirectory) && Directory.Exists(startupDirectory))
         {

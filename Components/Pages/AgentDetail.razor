@@ -1,6 +1,7 @@
-@page "/agents/{AgentName}"
+@page "/agents/{AgentKey}"
 @inject ICopilotAgentCatalogService AgentCatalogService
 @inject ICopilotAgentRunService AgentRunService
+@inject ICopilotWorkspaceAgentService WorkspaceAgentService
 @inject ICopilotConfigEditorService ConfigEditorService
 @inject ICopilotWorkService WorkService
 
@@ -33,13 +34,37 @@ else
             <div class="kv-item"><span>Source</span><strong>@_agent.SourceLabel</strong></div>
             <div class="kv-item"><span>Package</span><strong>@_agent.PackageVersion</strong></div>
             <div class="kv-item"><span>Definition</span><strong>@_agent.DefinitionPath</strong></div>
+            <div class="kv-item"><span>Status</span><strong>@(_agent.Enabled ? "Enabled" : "Disabled")</strong></div>
+            <div class="kv-item"><span>Workspace</span><strong>@(_agent.WorkspaceName ?? "Global")</strong></div>
             <div class="kv-item"><span>Custom</span><strong>@(_agent.IsCustom ? "Yes" : "No")</strong></div>
         </div>
+        @if (_workspaces.Count > 0)
+        {
+            <div class="panel-actions">
+                <label class="toolbar-field">
+                    <span>Clone target workspace</span>
+                    <select class="terminal-input" @bind="_cloneWorkspaceId">
+                        @foreach (var workspace in _workspaces)
+                        {
+                            <option value="@workspace.Id">@workspace.Name</option>
+                        }
+                    </select>
+                </label>
+            </div>
+        }
         <div class="panel-actions inline-actions">
-            <button type="button" class="action-button" @onclick="RunAgent">Run</button>
+            <button type="button" class="action-button" @onclick="RunAgentAsync">Run</button>
+            @if (_workspaces.Count > 0)
+            {
+                <button type="button" class="action-button action-button-muted" @onclick="CloneAgentAsync">Clone</button>
+            }
             @if (_agent.IsCustom)
             {
-                <button type="button" class="action-button action-button-muted" @onclick="ModifyAgent">Modify</button>
+                <button type="button" class="action-button action-button-muted" @onclick="ModifyAgentAsync">Modify</button>
+            }
+            @if (_agent.IsWorkspaceScoped && !string.IsNullOrWhiteSpace(_agent.WorkspaceAgentId))
+            {
+                <button type="button" class="action-button action-button-muted" @onclick="ToggleAgentAsync">@(_agent.Enabled ? "Disable" : "Enable")</button>
             }
         </div>
     </section>
@@ -51,10 +76,12 @@ else
 }
 
 @code {
-    [Parameter] public string AgentName { get; set; } = string.Empty;
+    [Parameter] public string AgentKey { get; set; } = string.Empty;
 
     private bool _loading = true;
     private CopilotDefinedAgent? _agent;
+    private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
+    private string? _cloneWorkspaceId;
     private string? _definitionContent;
     private string? _feedbackMessage;
     private bool _feedbackSucceeded;
@@ -62,21 +89,28 @@ else
     protected override async Task OnParametersSetAsync()
     {
         _loading = true;
-        _agent = await AgentCatalogService.GetDefinedAgentAsync(AgentName);
-        _definitionContent = _agent is not null && File.Exists(_agent.FullPath)
-            ? await File.ReadAllTextAsync(_agent.FullPath)
-            : null;
+        _workspaces = await WorkService.GetWorkspacesAsync();
+        _cloneWorkspaceId = (await WorkService.GetActiveWorkspaceAsync())?.Id ?? _workspaces.FirstOrDefault()?.Id;
+        await RefreshAgentAsync();
         _loading = false;
     }
 
-    private async Task RunAgent()
+    private async Task RefreshAgentAsync()
+    {
+        _agent = await AgentCatalogService.GetDefinedAgentAsync(AgentKey);
+        _definitionContent = _agent is not null && File.Exists(_agent.FullPath)
+            ? await File.ReadAllTextAsync(_agent.FullPath)
+            : null;
+    }
+
+    private async Task RunAgentAsync()
     {
         if (_agent is null)
         {
             return;
         }
 
-        var result = AgentRunService.RunAgent(_agent);
+        var result = await AgentRunService.RunAgentAsync(_agent);
         _feedbackSucceeded = result.Succeeded;
         _feedbackMessage = result.Message;
 
@@ -86,12 +120,28 @@ else
             {
                 Type = "agent-run",
                 Title = $"Ran {_agent.DisplayName}",
-                AgentName = _agent.Name
+                AgentName = _agent.Name,
+                Project = _agent.WorkspaceName
             });
         }
     }
 
-    private async Task ModifyAgent()
+    private async Task CloneAgentAsync()
+    {
+        if (_agent is null || string.IsNullOrWhiteSpace(_cloneWorkspaceId))
+        {
+            _feedbackSucceeded = false;
+            _feedbackMessage = "Select a destination workspace first.";
+            return;
+        }
+
+        var clone = await WorkspaceAgentService.CloneAgentToWorkspaceAsync(_agent, _cloneWorkspaceId);
+        var workspaceName = _workspaces.FirstOrDefault(workspace => string.Equals(workspace.Id, _cloneWorkspaceId, StringComparison.OrdinalIgnoreCase))?.Name ?? "workspace";
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"Cloned {_agent.DisplayName} into {workspaceName} as {clone.Name}. It starts disabled so you can customize it before use.";
+    }
+
+    private async Task ModifyAgentAsync()
     {
         if (_agent is null)
         {
@@ -109,8 +159,22 @@ else
                 Type = "config-open",
                 Title = $"Opened {_agent.DisplayName}",
                 AgentName = _agent.Name,
+                Project = _agent.WorkspaceName,
                 FilePath = _agent.FullPath
             });
         }
+    }
+
+    private async Task ToggleAgentAsync()
+    {
+        if (_agent is null || string.IsNullOrWhiteSpace(_agent.WorkspaceAgentId))
+        {
+            return;
+        }
+
+        await WorkspaceAgentService.SetWorkspaceAgentEnabledAsync(_agent.WorkspaceAgentId, !_agent.Enabled);
+        _feedbackSucceeded = true;
+        _feedbackMessage = $"{_agent.DisplayName} {(!_agent.Enabled ? "enabled" : "disabled")} for {_agent.WorkspaceName}.";
+        await RefreshAgentAsync();
     }
 }

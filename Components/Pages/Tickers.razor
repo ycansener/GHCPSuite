@@ -2,6 +2,7 @@
 @inject ICopilotTickerService TickerService
 @inject ICopilotWorkService WorkService
 @inject ICopilotConfigEditorService ConfigEditorService
+@inject NavigationManager Navigation
 
 <PageTitle>GHCP Suite | Tickers</PageTitle>
 
@@ -38,7 +39,7 @@ else
 
     <section class="content-grid">
         <article class="panel-card">
-            <div class="section-title">Create ticker</div>
+            <div class="section-title">@(_editingTickerId is null ? "Create ticker" : "Customize ticker")</div>
             @if (_workspaces.Count == 0)
             {
                 <p class="empty-state">Create a workspace first. Tickers always run inside a workspace folder.</p>
@@ -61,7 +62,7 @@ else
                     </label>
                     <label>
                         <span>Agent (optional)</span>
-                        <input class="terminal-input" @bind="_draft.AgentName" placeholder="idea-partner" />
+                        <input class="terminal-input" @bind="_draft.AgentName" placeholder="workspace-agent-name" />
                     </label>
                     <label>
                         <span>Interval minutes</span>
@@ -76,7 +77,11 @@ else
                         <span>Enable ticker after save</span>
                     </label>
                     <div class="panel-actions">
-                        <button type="button" class="action-button" @onclick="SaveTickerAsync">Save ticker</button>
+                        <button type="button" class="action-button" @onclick="SaveTickerAsync">@(_editingTickerId is null ? "Save ticker" : "Update ticker")</button>
+                        @if (_editingTickerId is not null)
+                        {
+                            <button type="button" class="action-button action-button-muted" @onclick="CancelEdit">Cancel</button>
+                        }
                     </div>
                 </div>
             }
@@ -115,6 +120,20 @@ else
 
     <section class="panel-card">
         <div class="section-title">Saved tickers</div>
+        @if (_workspaces.Count > 0)
+        {
+            <div class="panel-actions">
+                <label class="toolbar-field">
+                    <span>Clone target workspace</span>
+                    <select class="terminal-input" @bind="_cloneWorkspaceId">
+                        @foreach (var workspace in _workspaces)
+                        {
+                            <option value="@workspace.Id">@workspace.Name</option>
+                        }
+                    </select>
+                </label>
+            </div>
+        }
         @if (_tickers.Count == 0)
         {
             <p class="empty-state">No tickers defined yet.</p>
@@ -129,6 +148,10 @@ else
                         <div class="row-description">@ticker.Prompt</div>
                         <div class="row-meta">@GetWorkspaceName(ticker.WorkspaceId) · Every @ticker.IntervalMinutes min · @(string.IsNullOrWhiteSpace(ticker.AgentName) ? "GHCP" : $"Agent: {ticker.AgentName}")</div>
                         <div class="row-meta">Next: @FormatDate(ticker.NextRunAt) · Last: @FormatDate(ticker.LastRunAt)</div>
+                        @if (!string.IsNullOrWhiteSpace(ticker.ClonedFromTickerName))
+                        {
+                            <div class="row-meta">Cloned from @ticker.ClonedFromTickerName</div>
+                        }
                         @if (!string.IsNullOrWhiteSpace(ticker.LastError))
                         {
                             <div class="row-meta">@ticker.LastError</div>
@@ -136,7 +159,12 @@ else
                     </div>
                     <div class="row-side row-actions">
                         <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
-                        <button type="button" class="action-button action-button-small" @onclick="() => RunNowAsync(ticker.Id)">Run now</button>
+                        <button type="button" class="action-button action-button-small" @onclick="() => RunNowAsync(ticker)">Run now</button>
+                        <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => EditTicker(ticker.Id)">Edit</button>
+                        @if (_workspaces.Count > 0)
+                        {
+                            <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => CloneTickerAsync(ticker.Id)">Clone</button>
+                        }
                         <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ToggleEnabledAsync(ticker)">@((ticker.Enabled ? "Disable" : "Enable"))</button>
                         <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => DeleteAsync(ticker.Id)">Delete</button>
                     </div>
@@ -151,11 +179,17 @@ else
     [SupplyParameterFromQuery(Name = "workspaceId")]
     public string? WorkspaceQueryId { get; set; }
 
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "edit")]
+    public string? EditTickerId { get; set; }
+
     private bool _loading = true;
     private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
     private IReadOnlyList<CopilotTickerDefinition> _tickers = Array.Empty<CopilotTickerDefinition>();
     private IReadOnlyList<CopilotTickerRun> _runs = Array.Empty<CopilotTickerRun>();
     private CopilotTickerDefinition _draft = new() { IntervalMinutes = 60, Enabled = true };
+    private string? _editingTickerId;
+    private string? _cloneWorkspaceId;
     private string? _message;
     private bool _messageSucceeded;
 
@@ -166,6 +200,7 @@ else
 
     private async Task LoadAsync()
     {
+        _loading = true;
         _workspaces = await WorkService.GetWorkspacesAsync();
         _tickers = await TickerService.GetTickersAsync();
         _runs = await TickerService.GetTickerRunsAsync(maxItems: 20);
@@ -175,13 +210,28 @@ else
                 ? WorkspaceQueryId
                 : null;
 
-        if (!string.IsNullOrWhiteSpace(requestedWorkspaceId))
+        var defaultWorkspaceId = requestedWorkspaceId
+            ?? (await WorkService.GetActiveWorkspaceAsync())?.Id
+            ?? _workspaces.FirstOrDefault()?.Id
+            ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(_cloneWorkspaceId) && !string.IsNullOrWhiteSpace(defaultWorkspaceId))
         {
-            _draft.WorkspaceId = requestedWorkspaceId;
+            _cloneWorkspaceId = defaultWorkspaceId;
         }
-        else if (_workspaces.Count > 0 && string.IsNullOrWhiteSpace(_draft.WorkspaceId))
+
+        var editTicker = !string.IsNullOrWhiteSpace(EditTickerId)
+            ? _tickers.FirstOrDefault(ticker => string.Equals(ticker.Id, EditTickerId, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (editTicker is not null)
         {
-            _draft.WorkspaceId = (await WorkService.GetActiveWorkspaceAsync())?.Id ?? _workspaces[0].Id;
+            _editingTickerId = editTicker.Id;
+            _draft = CloneDraft(editTicker);
+        }
+        else if (_editingTickerId is null || !string.Equals(_editingTickerId, EditTickerId, StringComparison.OrdinalIgnoreCase))
+        {
+            ResetDraft(defaultWorkspaceId);
         }
 
         _loading = false;
@@ -198,22 +248,62 @@ else
 
         await TickerService.SaveTickerAsync(_draft);
         _messageSucceeded = true;
-        _message = $"Saved ticker {_draft.Name}.";
-        _draft = new CopilotTickerDefinition
-        {
-            IntervalMinutes = 60,
-            Enabled = true,
-            WorkspaceId = _workspaces.FirstOrDefault()?.Id ?? string.Empty
-        };
+        _message = _editingTickerId is null
+            ? $"Saved ticker {_draft.Name}."
+            : $"Updated ticker {_draft.Name}.";
+
+        var workspaceId = _draft.WorkspaceId;
+        _editingTickerId = null;
+        ClearEditQuery(workspaceId);
         await LoadAsync();
     }
 
-    private async Task RunNowAsync(string tickerId)
+    private async Task RunNowAsync(CopilotTickerDefinition ticker)
     {
-        await TickerService.QueueTickerRunAsync(tickerId);
+        if (!ticker.Enabled)
+        {
+            _messageSucceeded = false;
+            _message = $"{ticker.Name} is disabled. Enable it before running.";
+            return;
+        }
+
+        await TickerService.QueueTickerRunAsync(ticker.Id);
         _messageSucceeded = true;
         _message = "Ticker queued.";
         await LoadAsync();
+    }
+
+    private async Task CloneTickerAsync(string tickerId)
+    {
+        if (string.IsNullOrWhiteSpace(_cloneWorkspaceId))
+        {
+            _messageSucceeded = false;
+            _message = "Select a destination workspace first.";
+            return;
+        }
+
+        var clone = await TickerService.CloneTickerAsync(tickerId, _cloneWorkspaceId);
+        if (clone is null)
+        {
+            _messageSucceeded = false;
+            _message = "Unable to clone the ticker.";
+            return;
+        }
+
+        _messageSucceeded = true;
+        _message = $"Cloned {clone.ClonedFromTickerName ?? clone.Name} into {GetWorkspaceName(clone.WorkspaceId)} as {clone.Name}. It starts disabled so you can customize it safely.";
+        Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(clone.WorkspaceId)}&edit={Uri.EscapeDataString(clone.Id)}", forceLoad: false);
+    }
+
+    private void EditTicker(string tickerId)
+    {
+        var workspaceId = _tickers.FirstOrDefault(ticker => string.Equals(ticker.Id, tickerId, StringComparison.OrdinalIgnoreCase))?.WorkspaceId;
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            return;
+        }
+
+        Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}&edit={Uri.EscapeDataString(tickerId)}", forceLoad: false);
     }
 
     private async Task ToggleEnabledAsync(CopilotTickerDefinition ticker)
@@ -227,6 +317,12 @@ else
     private async Task DeleteAsync(string tickerId)
     {
         await TickerService.DeleteTickerAsync(tickerId);
+        if (string.Equals(_editingTickerId, tickerId, StringComparison.OrdinalIgnoreCase))
+        {
+            _editingTickerId = null;
+            ClearEditQuery(_draft.WorkspaceId);
+        }
+
         _messageSucceeded = true;
         _message = "Ticker deleted.";
         await LoadAsync();
@@ -239,6 +335,43 @@ else
         _message = result.Message;
         await Task.CompletedTask;
     }
+
+    private void CancelEdit()
+    {
+        _editingTickerId = null;
+        ClearEditQuery(_draft.WorkspaceId);
+    }
+
+    private void ClearEditQuery(string? workspaceId)
+    {
+        var destination = string.IsNullOrWhiteSpace(workspaceId)
+            ? "/tickers"
+            : $"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}";
+        Navigation.NavigateTo(destination, forceLoad: false);
+    }
+
+    private void ResetDraft(string workspaceId)
+    {
+        _draft = new CopilotTickerDefinition
+        {
+            IntervalMinutes = 60,
+            Enabled = true,
+            WorkspaceId = workspaceId
+        };
+    }
+
+    private static CopilotTickerDefinition CloneDraft(CopilotTickerDefinition source) => new()
+    {
+        Id = source.Id,
+        Name = source.Name,
+        WorkspaceId = source.WorkspaceId,
+        AgentName = source.AgentName,
+        Prompt = source.Prompt,
+        IntervalMinutes = source.IntervalMinutes,
+        Enabled = source.Enabled,
+        ClonedFromTickerId = source.ClonedFromTickerId,
+        ClonedFromTickerName = source.ClonedFromTickerName
+    };
 
     private string GetWorkspaceName(string workspaceId) =>
         _workspaces.FirstOrDefault(workspace => string.Equals(workspace.Id, workspaceId, StringComparison.OrdinalIgnoreCase))?.Name ?? "Unknown workspace";

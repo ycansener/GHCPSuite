@@ -9,6 +9,8 @@ public sealed class CopilotTickerDefinition
     public string Prompt { get; set; } = string.Empty;
     public int IntervalMinutes { get; set; } = 60;
     public bool Enabled { get; set; } = true;
+    public string? ClonedFromTickerId { get; set; }
+    public string? ClonedFromTickerName { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastRunAt { get; set; }

@@ -64,6 +64,7 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
     {
         data.Workspaces = NormalizeWorkspaces(data.Workspaces);
         data.IgnoredWorkspaceFolders = NormalizeIgnoredWorkspaceFolders(data.IgnoredWorkspaceFolders);
+        data.WorkspaceAgents = NormalizeWorkspaceAgents(data.WorkspaceAgents);
         data.Tickers = NormalizeTickers(data.Tickers);
         data.TickerRuns = NormalizeTickerRuns(data.TickerRuns);
         data.SessionWork = NormalizeSessionWork(data.SessionWork);
@@ -88,6 +89,8 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
                 ticker.AgentName = NullIfBlank(ticker.AgentName);
                 ticker.Prompt = ticker.Prompt.Trim();
                 ticker.IntervalMinutes = ticker.IntervalMinutes <= 0 ? 60 : ticker.IntervalMinutes;
+                ticker.ClonedFromTickerId = NullIfBlank(ticker.ClonedFromTickerId);
+                ticker.ClonedFromTickerName = NullIfBlank(ticker.ClonedFromTickerName);
                 ticker.CreatedAt = ticker.CreatedAt == default ? DateTimeOffset.UtcNow : ticker.CreatedAt;
                 ticker.UpdatedAt = ticker.UpdatedAt == default ? ticker.CreatedAt : ticker.UpdatedAt;
                 ticker.LastStatus = NullIfBlank(ticker.LastStatus);
@@ -106,6 +109,34 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
                 return ticker;
             })
             .OrderBy(ticker => ticker.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static List<CopilotWorkspaceAgent> NormalizeWorkspaceAgents(List<CopilotWorkspaceAgent>? source)
+    {
+        return (source ?? [])
+            .Where(agent =>
+                !string.IsNullOrWhiteSpace(agent.WorkspaceId) &&
+                !string.IsNullOrWhiteSpace(agent.Name) &&
+                !string.IsNullOrWhiteSpace(agent.FileName))
+            .Select(agent =>
+            {
+                agent.Id = string.IsNullOrWhiteSpace(agent.Id) ? Guid.NewGuid().ToString("N") : agent.Id.Trim();
+                agent.WorkspaceId = agent.WorkspaceId.Trim();
+                agent.Name = agent.Name.Trim();
+                agent.DisplayName = string.IsNullOrWhiteSpace(agent.DisplayName) ? agent.Name : agent.DisplayName.Trim();
+                agent.FileName = agent.FileName.Trim();
+                agent.SourceAgentId = NullIfBlank(agent.SourceAgentId);
+                agent.SourceAgentName = NullIfBlank(agent.SourceAgentName);
+                agent.SourceLabel = NullIfBlank(agent.SourceLabel);
+                agent.CreatedAt = agent.CreatedAt == default ? DateTimeOffset.UtcNow : agent.CreatedAt;
+                agent.UpdatedAt = agent.UpdatedAt == default ? agent.CreatedAt : agent.UpdatedAt;
+                return agent;
+            })
+            .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.UpdatedAt).First())
+            .OrderBy(agent => agent.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(agent => agent.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 

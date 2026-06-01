@@ -7,11 +7,13 @@ namespace GHCP.Suite.Services;
 public interface ICopilotAgentCatalogService
 {
     Task<IReadOnlyList<CopilotDefinedAgent>> GetDefinedAgentsAsync(CancellationToken cancellationToken = default);
-    Task<CopilotDefinedAgent?> GetDefinedAgentAsync(string name, CancellationToken cancellationToken = default);
+    Task<CopilotDefinedAgent?> GetDefinedAgentAsync(string key, CancellationToken cancellationToken = default);
 }
 
 public sealed class CopilotAgentCatalogService(
     ICopilotEnvironmentService environmentService,
+    ICopilotWorkspaceAgentService workspaceAgentService,
+    ICopilotWorkService workService,
     IOptionsMonitor<CopilotSuiteOptions> optionsMonitor) : ICopilotAgentCatalogService
 {
     public async Task<IReadOnlyList<CopilotDefinedAgent>> GetDefinedAgentsAsync(CancellationToken cancellationToken = default)
@@ -19,17 +21,55 @@ public sealed class CopilotAgentCatalogService(
         var paths = environmentService.GetPaths();
         var agents = new List<CopilotDefinedAgent>();
         var customAgents = new Dictionary<string, CopilotDefinedAgent>(StringComparer.OrdinalIgnoreCase);
+        var workspaceScopedAgents = new List<CopilotDefinedAgent>();
 
         foreach (var customRoot in GetCustomDefinitions(optionsMonitor.CurrentValue, paths))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            foreach (var agent in await LoadCustomAgentsAsync(customRoot.Path, customRoot.SourceLabel, cancellationToken))
+            foreach (var agent in await LoadCustomAgentsAsync(customRoot.Path, customRoot.SourceLabel, GetExcludedMirrorRoot(paths), cancellationToken))
             {
                 customAgents[agent.Name] = agent;
             }
         }
 
         agents.AddRange(customAgents.Values);
+
+        foreach (var workspaceAgent in await workspaceAgentService.GetWorkspaceAgentsAsync(cancellationToken: cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var workspace = await workService.GetWorkspaceAsync(workspaceAgent.WorkspaceId, cancellationToken);
+            if (workspace is null || string.IsNullOrWhiteSpace(workspace.RootPath))
+            {
+                continue;
+            }
+
+            var agentsRoot = CopilotWorkspaceStorage.GetAgentsRoot(workspace.RootPath);
+            var filePath = Path.Combine(agentsRoot, workspaceAgent.FileName);
+            if (!File.Exists(filePath))
+            {
+                continue;
+            }
+
+            var agent = await ParseDefinitionAsync(
+                filePath,
+                agentsRoot,
+                packageVersion: "Workspace clone",
+                isCustom: true,
+                sourceLabel: $"Workspace · {workspace.Name}",
+                cancellationToken,
+                idOverride: workspaceAgent.Id,
+                workspaceId: workspace.Id,
+                workspaceName: workspace.Name,
+                enabled: workspaceAgent.Enabled,
+                workspaceAgentId: workspaceAgent.Id);
+
+            if (agent is not null)
+            {
+                workspaceScopedAgents.Add(agent);
+            }
+        }
+
+        agents.AddRange(workspaceScopedAgents);
 
         var definitionsRoot = GetDefinitionsRoot(paths.CopilotHome);
         if (definitionsRoot is not null && Directory.Exists(definitionsRoot))
@@ -56,21 +96,24 @@ public sealed class CopilotAgentCatalogService(
 
         return agents
             .OrderByDescending(agent => agent.IsCustom)
+            .ThenByDescending(agent => agent.IsWorkspaceScoped)
             .ThenBy(agent => agent.Kind, StringComparer.OrdinalIgnoreCase)
             .ThenBy(agent => agent.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(agent => agent.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    public async Task<CopilotDefinedAgent?> GetDefinedAgentAsync(string name, CancellationToken cancellationToken = default)
+    public async Task<CopilotDefinedAgent?> GetDefinedAgentAsync(string key, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
+        if (string.IsNullOrWhiteSpace(key))
         {
             return null;
         }
 
         var agents = await GetDefinedAgentsAsync(cancellationToken);
-        return agents.FirstOrDefault(agent => string.Equals(agent.Name, name, StringComparison.OrdinalIgnoreCase));
+        return agents.FirstOrDefault(agent =>
+            string.Equals(agent.Id, key, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(agent.Name, key, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IEnumerable<(string Path, string SourceLabel)> GetCustomDefinitions(CopilotSuiteOptions options, CopilotPaths paths)
@@ -144,12 +187,18 @@ public sealed class CopilotAgentCatalogService(
     private static async Task<IReadOnlyList<CopilotDefinedAgent>> LoadCustomAgentsAsync(
         string root,
         string sourceLabel,
+        string? excludedRoot,
         CancellationToken cancellationToken)
     {
         var agents = new Dictionary<string, CopilotDefinedAgent>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var file in EnumerateCustomDefinitionFiles(root))
         {
+            if (!string.IsNullOrWhiteSpace(excludedRoot) && IsUnderPath(file, excludedRoot))
+            {
+                continue;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             var agent = await ParseDefinitionAsync(
                 file,
@@ -173,7 +222,12 @@ public sealed class CopilotAgentCatalogService(
         string packageVersion,
         bool isCustom,
         string sourceLabel,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? idOverride = null,
+        string? workspaceId = null,
+        string? workspaceName = null,
+        bool enabled = true,
+        string? workspaceAgentId = null)
     {
         var lines = await LoadDefinitionLinesAsync(filePath, cancellationToken);
 
@@ -253,6 +307,7 @@ public sealed class CopilotAgentCatalogService(
         var relativePath = Path.GetRelativePath(definitionsRoot, filePath);
 
         return new CopilotDefinedAgent(
+            idOverride ?? CreateAgentId(isCustom, filePath),
             name,
             displayName,
             description,
@@ -263,7 +318,11 @@ public sealed class CopilotAgentCatalogService(
             sourceLabel,
             packageVersion,
             relativePath,
-            filePath);
+            filePath,
+            workspaceId,
+            workspaceName,
+            enabled,
+            workspaceAgentId);
     }
 
     private static string GetCustomAgentInvocationName(string filePath)
@@ -431,5 +490,22 @@ public sealed class CopilotAgentCatalogService(
         }
 
         return value;
+    }
+
+    private static string CreateAgentId(bool isCustom, string filePath)
+    {
+        var prefix = isCustom ? "custom" : "builtin";
+        return $"{prefix}:{filePath}".ToLowerInvariant();
+    }
+
+    private static string GetExcludedMirrorRoot(CopilotPaths paths) =>
+        CopilotWorkspaceAgentService.GetMirrorCollectionRoot(paths.CopilotHome);
+
+    private static bool IsUnderPath(string path, string root)
+    {
+        var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalizedPath, normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 }

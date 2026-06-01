@@ -84,7 +84,7 @@ else
             {
                 <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
             }
-            <p class="panel-copy">New workspaces are created as folders under <code>@(WorkspaceRootDirectory ?? "(set this in Settings first)")</code>.</p>
+            <p class="panel-copy">New workspaces are created as folders under <code>@(WorkspaceRootDirectory ?? "(set this in Settings first)")</code>, and each managed workspace gets a dedicated <code>.ghcpsuite</code> folder for suite-owned assets.</p>
             <div class="terminal-form">
                 <label>
                     <span>Name</span>

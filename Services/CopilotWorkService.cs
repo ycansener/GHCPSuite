@@ -39,6 +39,11 @@ public sealed class CopilotWorkService(
     public async Task<IReadOnlyList<CopilotWorkspace>> GetWorkspacesAsync(CancellationToken cancellationToken = default)
     {
         var data = await workDataService.GetDataAsync(cancellationToken);
+        foreach (var workspace in data.Workspaces.Where(workspace => !string.IsNullOrWhiteSpace(workspace.RootPath)))
+        {
+            CopilotWorkspaceStorage.EnsureWorkspaceStructure(NormalizeWorkspaceRoot(workspace.RootPath));
+        }
+
         return data.Workspaces.Select(CloneWorkspace).ToArray();
     }
 
@@ -50,17 +55,30 @@ public sealed class CopilotWorkService(
         }
 
         var data = await workDataService.GetDataAsync(cancellationToken);
-        return data.Workspaces
+        var workspace = data.Workspaces
             .Where(workspace => TextComparer.Equals(workspace.Id, workspaceId))
             .Select(CloneWorkspace)
             .FirstOrDefault();
+        if (workspace is not null)
+        {
+            CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
+        }
+
+        return workspace;
     }
 
     public async Task<CopilotWorkspace?> GetActiveWorkspaceAsync(CancellationToken cancellationToken = default)
     {
         var data = await workDataService.GetDataAsync(cancellationToken);
         var workspace = data.Workspaces.FirstOrDefault(candidate => TextComparer.Equals(candidate.Id, data.ActiveWorkspaceId));
-        return workspace is null ? null : CloneWorkspace(workspace);
+        if (workspace is null)
+        {
+            return null;
+        }
+
+        var clone = CloneWorkspace(workspace);
+        CopilotWorkspaceStorage.EnsureWorkspaceStructure(clone.RootPath);
+        return clone;
     }
 
     public async Task SetActiveWorkspaceAsync(string workspaceId, CancellationToken cancellationToken = default)
@@ -93,6 +111,7 @@ public sealed class CopilotWorkService(
             CreatedAt = workspace.CreatedAt == default ? DateTimeOffset.UtcNow : workspace.CreatedAt,
             UpdatedAt = DateTimeOffset.UtcNow
         };
+        CopilotWorkspaceStorage.EnsureWorkspaceStructure(item.RootPath);
 
         var existing = data.Workspaces.FindIndex(candidate => TextComparer.Equals(candidate.Id, item.Id));
         if (existing >= 0)

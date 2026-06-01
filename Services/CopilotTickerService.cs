@@ -12,6 +12,7 @@ public interface ICopilotTickerService
     Task<IReadOnlyList<CopilotTickerDefinition>> GetTickersAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CopilotTickerRun>> GetTickerRunsAsync(string? tickerId = null, int maxItems = 30, CancellationToken cancellationToken = default);
     Task SaveTickerAsync(CopilotTickerDefinition ticker, CancellationToken cancellationToken = default);
+    Task<CopilotTickerDefinition?> CloneTickerAsync(string tickerId, string workspaceId, CancellationToken cancellationToken = default);
     Task DeleteTickerAsync(string tickerId, CancellationToken cancellationToken = default);
     Task SetTickerEnabledAsync(string tickerId, bool enabled, CancellationToken cancellationToken = default);
     Task QueueTickerRunAsync(string tickerId, CancellationToken cancellationToken = default);
@@ -20,6 +21,8 @@ public interface ICopilotTickerService
 public sealed class CopilotTickerService(
     ICopilotWorkDataService workDataService,
     ICopilotWorkService workService,
+    ICopilotWorkspaceAgentService workspaceAgentService,
+    ICopilotAgentCatalogService agentCatalogService,
     ILogger<CopilotTickerService> logger) : BackgroundService, ICopilotTickerService
 {
     private static readonly StringComparer TextComparer = StringComparer.OrdinalIgnoreCase;
@@ -57,10 +60,12 @@ public sealed class CopilotTickerService(
             Prompt = ticker.Prompt.Trim(),
             IntervalMinutes = ticker.IntervalMinutes <= 0 ? 60 : ticker.IntervalMinutes,
             Enabled = ticker.Enabled,
+            ClonedFromTickerId = existing?.ClonedFromTickerId ?? ticker.ClonedFromTickerId,
+            ClonedFromTickerName = existing?.ClonedFromTickerName ?? ticker.ClonedFromTickerName,
             CreatedAt = existing?.CreatedAt ?? now,
             UpdatedAt = now,
             LastRunAt = existing?.LastRunAt,
-            LastStatus = existing?.LastStatus,
+            LastStatus = ticker.Enabled ? existing?.LastStatus : "Disabled",
             LastOutputPath = existing?.LastOutputPath,
             LastError = existing?.LastError,
             NextRunAt = ticker.Enabled
@@ -79,6 +84,63 @@ public sealed class CopilotTickerService(
         }
 
         await workDataService.SaveDataAsync(data, cancellationToken);
+    }
+
+    public async Task<CopilotTickerDefinition?> CloneTickerAsync(string tickerId, string workspaceId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tickerId) || string.IsNullOrWhiteSpace(workspaceId))
+        {
+            return null;
+        }
+
+        var data = await workDataService.GetDataAsync(cancellationToken);
+        var source = data.Tickers.FirstOrDefault(candidate => TextComparer.Equals(candidate.Id, tickerId));
+        if (source is null)
+        {
+            return null;
+        }
+
+        var workspace = await workService.GetWorkspaceAsync(workspaceId, cancellationToken);
+        if (workspace is null)
+        {
+            return null;
+        }
+
+        var agentName = source.AgentName;
+        if (!string.IsNullOrWhiteSpace(agentName) && !TextComparer.Equals(source.WorkspaceId, workspaceId))
+        {
+            var sourceWorkspaceAgent = await workspaceAgentService.GetWorkspaceAgentByInvocationNameAsync(source.WorkspaceId, agentName, cancellationToken);
+            if (sourceWorkspaceAgent is not null)
+            {
+                var sourceAgent = await agentCatalogService.GetDefinedAgentAsync(sourceWorkspaceAgent.Id, cancellationToken);
+                if (sourceAgent is not null)
+                {
+                    var clonedAgent = await workspaceAgentService.CloneAgentToWorkspaceAsync(sourceAgent, workspaceId, cancellationToken);
+                    agentName = clonedAgent.Name;
+                }
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var clone = new CopilotTickerDefinition
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = GetUniqueTickerName(source.Name, workspaceId, data.Tickers),
+            WorkspaceId = workspaceId,
+            AgentName = agentName,
+            Prompt = source.Prompt,
+            IntervalMinutes = source.IntervalMinutes,
+            Enabled = false,
+            ClonedFromTickerId = source.Id,
+            ClonedFromTickerName = source.Name,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LastStatus = "Disabled"
+        };
+
+        data.Tickers.Add(clone);
+        await workDataService.SaveDataAsync(data, cancellationToken);
+        return CloneTicker(clone);
     }
 
     public async Task DeleteTickerAsync(string tickerId, CancellationToken cancellationToken = default)
@@ -111,6 +173,14 @@ public sealed class CopilotTickerService(
         var ticker = data.Tickers.FirstOrDefault(candidate => TextComparer.Equals(candidate.Id, tickerId));
         if (ticker is null)
         {
+            return;
+        }
+
+        if (!ticker.Enabled)
+        {
+            ticker.LastStatus = "Disabled";
+            ticker.UpdatedAt = DateTimeOffset.UtcNow;
+            await workDataService.SaveDataAsync(data, cancellationToken);
             return;
         }
 
@@ -190,12 +260,37 @@ public sealed class CopilotTickerService(
             return;
         }
 
+        if (!string.IsNullOrWhiteSpace(ticker.AgentName))
+        {
+            var workspaceAgent = await workspaceAgentService.GetWorkspaceAgentByInvocationNameAsync(workspace.Id, ticker.AgentName, cancellationToken);
+            if (workspaceAgent is not null)
+            {
+                if (!workspaceAgent.Enabled)
+                {
+                    await FinalizeTickerRunAsync(
+                        tickerId,
+                        workspace,
+                        startedAt,
+                        DateTimeOffset.UtcNow,
+                        "Skipped",
+                        null,
+                        "Agent disabled for this workspace.",
+                        cancellationToken,
+                        "Skipped because the referenced workspace agent is disabled.");
+                    return;
+                }
+
+                await workspaceAgentService.SynchronizeWorkspaceAgentAsync(workspaceAgent.Id, cancellationToken);
+            }
+        }
+
         ticker.LastStatus = "Running";
         ticker.UpdatedAt = startedAt;
         ticker.LastError = null;
         await workDataService.SaveDataAsync(data, cancellationToken);
 
-        var outputDirectory = Path.Combine(workspace.RootPath, ".ghcp-suite", "tickers", SanitizePathSegment(ticker.Name));
+        CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
+        var outputDirectory = Path.Combine(CopilotWorkspaceStorage.GetTickersRoot(workspace.RootPath), SanitizePathSegment(ticker.Name));
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}.md");
 
@@ -366,6 +461,8 @@ public sealed class CopilotTickerService(
         Prompt = source.Prompt,
         IntervalMinutes = source.IntervalMinutes,
         Enabled = source.Enabled,
+        ClonedFromTickerId = source.ClonedFromTickerId,
+        ClonedFromTickerName = source.ClonedFromTickerName,
         CreatedAt = source.CreatedAt,
         UpdatedAt = source.UpdatedAt,
         LastRunAt = source.LastRunAt,
@@ -388,4 +485,24 @@ public sealed class CopilotTickerService(
         OutputPath = source.OutputPath,
         Summary = source.Summary
     };
+
+    private static string GetUniqueTickerName(string sourceName, string workspaceId, IEnumerable<CopilotTickerDefinition> existingTickers)
+    {
+        var existingNames = new HashSet<string>(
+            existingTickers
+                .Where(ticker => TextComparer.Equals(ticker.WorkspaceId, workspaceId))
+                .Select(ticker => ticker.Name),
+            TextComparer);
+
+        var baseName = $"{sourceName.Trim()} copy";
+        var candidate = baseName;
+        var suffix = 2;
+        while (existingNames.Contains(candidate))
+        {
+            candidate = $"{baseName} {suffix}";
+            suffix++;
+        }
+
+        return candidate;
+    }
 }

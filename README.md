@@ -259,6 +259,7 @@ The root folder under which managed workspaces live.
 - new workspaces are created here
 - available folders are discovered here
 - ignored folders are tracked relative to this workflow
+- each managed workspace gets a dedicated `.ghcpsuite` folder for suite-owned assets
 
 #### `StartupDirectory`
 
@@ -298,12 +299,45 @@ Suite-owned persistence file. It stores:
 
 This shape is defined by `SuiteDataDocument`.
 
+It now also persists:
+
+- workspace-cloned agent metadata
+- ticker clone provenance
+
+### Workspace-local suite folder
+
+Each managed workspace keeps suite-owned artifacts inside:
+
+```text
+<workspace>\.ghcpsuite\
+```
+
+The suite currently scaffolds:
+
+```text
+<workspace>\.ghcpsuite\agents\
+<workspace>\.ghcpsuite\init\
+<workspace>\.ghcpsuite\tickers\
+```
+
+This keeps suite-managed files out of the workspace root so the project directory stays cleaner.
+
+Legacy `.ghcp-suite` folders are migrated to `.ghcpsuite` when the suite touches a managed workspace.
+
+Workspace-cloned agent definitions are stored canonically in:
+
+```text
+<workspace>\.ghcpsuite\agents\<workspace-agent-name>.agent.md
+```
+
+For Copilot CLI runtime compatibility, the suite mirrors those files into the Copilot user agent store before execution. The workspace copy remains the source of truth.
+
 ### Workspace-local ticker output
 
 Ticker output is written into the workspace itself:
 
 ```text
-<workspace>\.ghcp-suite\tickers\<ticker-name>\YYYYMMDD-HHMMSS.md
+<workspace>\.ghcpsuite\tickers\<ticker-name>\YYYYMMDD-HHMMSS.md
 ```
 
 This keeps recurring prompt output close to the workspace it belongs to.
@@ -493,8 +527,26 @@ Each row includes:
 - last run
 - current status
 - **Run now**
+- **Edit**
+- **Enable/Disable**
 
 Use this to review or manually execute recurring workspace automation.
+
+#### Workspace agents
+
+Shows workspace-local cloned agents managed by the suite.
+
+Each row includes:
+
+- display name
+- invocation name
+- definition path
+- enabled/disabled status
+- **Run**
+- **Modify**
+- **Enable/Disable**
+
+Use this when you want to customize agent behavior per workspace without changing global agent definitions.
 
 #### Agents used
 
@@ -738,7 +790,7 @@ Shows:
 - enabled tickers
 - recent runs
 
-#### Create ticker
+#### Create / customize ticker
 
 Form fields:
 
@@ -748,6 +800,8 @@ Form fields:
 - **Interval minutes**
 - **Prompt**
 - **Enable ticker after save**
+
+The same form is also used to edit an existing ticker, including cloned tickers.
 
 Use this when you want scheduled GHCP work such as:
 
@@ -777,8 +831,12 @@ Operational list of all ticker definitions.
 Actions:
 
 - **Run now**
+- **Edit**
+- **Clone**
 - **Enable/Disable**
 - **Delete**
+
+Cloned tickers start disabled so they can be customized safely before they begin running in the target workspace.
 
 Use **Run now** for ad hoc execution without waiting for schedule.
 
@@ -958,10 +1016,11 @@ Use Session detail after an important session to convert raw activity into durab
 
 ## Agents page (`/agents`)
 
-**Purpose:** browse installed Copilot agents.
+**Purpose:** browse installed Copilot agents and clone them into workspaces.
 
 The page separates:
 
+- **Workspace clones**
 - **Custom** agents
 - **Default** agents
 
@@ -977,6 +1036,7 @@ Main table includes:
 - model
 - tool access
 - source
+- enabled/disabled state
 - package version
 - definition path
 - actions
@@ -984,20 +1044,24 @@ Main table includes:
 Actions:
 
 - **Run**
+- **Clone**
 - **Modify** for custom agents
+- **Enable/Disable** for workspace-cloned agents
 
 ### Notes
 
-- custom agents are expected from `~/.copilot/agents` or `.github/agents`
+- suite-managed workspace assets belong under `<workspace>\.ghcpsuite\`
+- workspace clones are mirrored into `~/.copilot/agents\ghcpsuite\...` only so Copilot CLI can run them without polluting the workspace root
+- Copilot-native global custom agents are still typically discovered from `~/.copilot/agents` or legacy `.github/agents`
 - built-in agents come from the Copilot CLI package definitions
 
 ### Best usage pattern
 
-Use this page to audit what agents are installed locally and quickly test or edit custom ones.
+Use this page to audit what agents are installed locally, clone them into a workspace, and manage the enabled state of workspace-specific variants.
 
 ---
 
-## Agent detail page (`/agents/{agentName}`)
+## Agent detail page (`/agents/{agentKey}`)
 
 **Purpose:** inspect and run one agent.
 
@@ -1014,12 +1078,16 @@ Shows:
 - source
 - package
 - definition path
+- enabled/disabled state
+- workspace scope when applicable
 - whether it is custom
 
 Actions:
 
 - **Run**
+- **Clone**
 - **Modify** for custom agents
+- **Enable/Disable** for workspace-cloned agents
 
 #### Definition file
 
@@ -1267,12 +1335,19 @@ Ticker execution currently uses arguments like:
 
 ## Agent model
 
-Agents are discovered through the local Copilot installation and custom agent locations.
+Agents are discovered through the local Copilot installation, global custom agent locations, and workspace-cloned definitions tracked by the suite.
 
 The suite distinguishes:
 
 - built-in/default agents
-- custom agents
+- global custom agents
+- workspace-cloned agents
+
+Workspace clones are:
+
+1. stored in `<workspace>\.ghcpsuite\agents`
+2. tracked in `suiteData.json` with workspace-specific enabled state
+3. mirrored into the Copilot user-agents area right before launch or ticker execution so they remain runnable
 
 Activity for agent runs is recorded into suite work history so the app can surface:
 

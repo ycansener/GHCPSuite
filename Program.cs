@@ -10,6 +10,7 @@ builder.Services.AddRazorComponents()
 builder.Services.Configure<CopilotSuiteOptions>(builder.Configuration.GetSection(CopilotSuiteOptions.SectionName));
 builder.Services.AddSingleton<ICopilotSettingsService, CopilotSettingsService>();
 builder.Services.AddSingleton<ICopilotEnvironmentService, CopilotEnvironmentService>();
+builder.Services.AddSingleton<ICopilotWorkspaceAgentService, CopilotWorkspaceAgentService>();
 builder.Services.AddSingleton<ICopilotAgentCatalogService, CopilotAgentCatalogService>();
 builder.Services.AddSingleton<ICopilotAgentRunService, CopilotAgentRunService>();
 builder.Services.AddSingleton<ICopilotWorkDataService, CopilotWorkDataService>();
