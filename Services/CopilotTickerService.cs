@@ -32,12 +32,14 @@ public sealed class CopilotTickerService(
     public async Task<IReadOnlyList<CopilotTickerDefinition>> GetTickersAsync(CancellationToken cancellationToken = default)
     {
         var data = await workDataService.GetDataAsync(cancellationToken);
+        await EnsureTickerWorkspaceDataAsync(data.Tickers.Select(ticker => ticker.WorkspaceId), cancellationToken);
         return data.Tickers.Select(CloneTicker).OrderBy(ticker => ticker.Name, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     public async Task<IReadOnlyList<CopilotTickerRun>> GetTickerRunsAsync(string? tickerId = null, int maxItems = 30, CancellationToken cancellationToken = default)
     {
         var data = await workDataService.GetDataAsync(cancellationToken);
+        await EnsureTickerWorkspaceDataAsync(data.TickerRuns.Select(run => run.WorkspaceId), cancellationToken);
         return data.TickerRuns
             .Where(run => string.IsNullOrWhiteSpace(tickerId) || TextComparer.Equals(run.TickerId, tickerId))
             .OrderByDescending(run => run.CompletedAt)
@@ -289,8 +291,8 @@ public sealed class CopilotTickerService(
         ticker.LastError = null;
         await workDataService.SaveDataAsync(data, cancellationToken);
 
-        CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
-        var outputDirectory = Path.Combine(CopilotWorkspaceStorage.GetTickersRoot(workspace.RootPath), SanitizePathSegment(ticker.Name));
+        CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
+        var outputDirectory = Path.Combine(CopilotWorkspaceStorage.GetTickersRoot(workspace.DataRootPath), SanitizePathSegment(ticker.Name));
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}.md");
 
@@ -485,6 +487,23 @@ public sealed class CopilotTickerService(
         OutputPath = source.OutputPath,
         Summary = source.Summary
     };
+
+    private async Task EnsureTickerWorkspaceDataAsync(IEnumerable<string?> workspaceIds, CancellationToken cancellationToken)
+    {
+        foreach (var workspaceId in workspaceIds
+                     .Where(id => !string.IsNullOrWhiteSpace(id))
+                     .Select(id => id!)
+                     .Distinct(TextComparer))
+        {
+            var workspace = await workService.GetWorkspaceAsync(workspaceId, cancellationToken);
+            if (workspace is null)
+            {
+                continue;
+            }
+
+            CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
+        }
+    }
 
     private static string GetUniqueTickerName(string sourceName, string workspaceId, IEnumerable<CopilotTickerDefinition> existingTickers)
     {

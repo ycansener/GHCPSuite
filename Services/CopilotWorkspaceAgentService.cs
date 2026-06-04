@@ -73,10 +73,10 @@ public sealed class CopilotWorkspaceAgentService(
         var workspace = await workService.GetWorkspaceAsync(workspaceId, cancellationToken)
             ?? throw new InvalidOperationException("The destination workspace could not be found.");
 
-        CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
+        CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
 
         var data = await workDataService.GetDataAsync(cancellationToken);
-        var agentsRoot = CopilotWorkspaceStorage.GetAgentsRoot(workspace.RootPath);
+        var agentsRoot = CopilotWorkspaceStorage.GetAgentsRoot(workspace.DataRootPath);
         Directory.CreateDirectory(agentsRoot);
 
         var baseName = BuildBaseInvocationName(workspace.Name, source.Name);
@@ -141,8 +141,8 @@ public sealed class CopilotWorkspaceAgentService(
             return null;
         }
 
-        CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
-        var sourcePath = Path.Combine(CopilotWorkspaceStorage.GetAgentsRoot(workspace.RootPath), agent.FileName);
+        CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
+        var sourcePath = Path.Combine(CopilotWorkspaceStorage.GetAgentsRoot(workspace.DataRootPath), agent.FileName);
         if (!File.Exists(sourcePath))
         {
             return null;

@@ -169,6 +169,14 @@
   ],
   "ActivityHistory": [
     {
+      "Id": "81e7bd498de94e9db30dbf0218af3a5c",
+      "Timestamp": "2026-06-01T22:05:09.8111169+00:00",
+      "Type": "workspace-session-start",
+      "Title": "Started GHCP in GHCPSuite",
+      "Project": "GHCPSuite",
+      "FilePath": "C:\\Projects\\GHCPSuite"
+    },
+    {
       "Id": "656cc377958a4b0e8ddca1c3658f544b",
       "Timestamp": "2026-05-31T22:19:42.7256132+00:00",
       "Type": "workspace-open",

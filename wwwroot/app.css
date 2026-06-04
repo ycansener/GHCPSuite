@@ -64,10 +64,23 @@ h1 {
     display: flex;
     gap: 1rem;
     align-items: center;
+    justify-content: space-between;
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--line);
     background: rgba(13, 20, 32, 0.95);
     backdrop-filter: blur(8px);
+}
+
+.suite-topbar-main,
+.suite-topbar-actions {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.suite-topbar-actions {
+    margin-left: auto;
+    justify-content: flex-end;
 }
 
 .suite-brand {
@@ -82,6 +95,11 @@ h1 {
     font-size: 0.95rem;
 }
 
+.suite-workspace-indicator {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
 .suite-body {
     flex: 1;
     display: grid;
@@ -92,6 +110,19 @@ h1 {
     padding: 1rem;
     border-right: 1px solid var(--line);
     background: rgba(8, 12, 18, 0.85);
+}
+
+.suite-nav-section + .suite-nav-section {
+    margin-top: 1.1rem;
+}
+
+.suite-nav-section-label {
+    margin: 0 0 0.55rem;
+    padding: 0 0.35rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 .suite-nav-link {
@@ -122,6 +153,7 @@ h1 {
 }
 
 .suite-nav-link.active,
+.suite-nav-group-link.active,
 .suite-nav-link:hover {
     border-color: var(--line);
     background: var(--panel);

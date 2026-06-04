@@ -1,25 +1,83 @@
 ﻿@inherits LayoutComponentBase
-@inject IEnumerable<ISuiteModuleProvider> ModuleProviders
+@implements IDisposable
+@inject ICopilotWorkService WorkService
+@inject NavigationManager Navigation
 
 <PageTitle>GHCP Suite</PageTitle>
 
 <div class="suite-shell">
     <header class="suite-topbar">
-        <a href="/" class="suite-brand">GHCP Suite</a>
-        <span class="suite-tagline">Local portal for sessions, config, agents, and resume workflows.</span>
+        <div class="suite-topbar-main">
+            <a href="/workspace" class="suite-brand">GHCP Suite</a>
+            <span class="suite-tagline">Local portal for sessions, config, agents, and resume workflows.</span>
+        </div>
+        <div class="suite-topbar-actions">
+            <span class="suite-workspace-indicator">Workspace: @(_activeWorkspace?.Name ?? "None selected")</span>
+            <a href="/" class="action-button action-button-small action-button-muted">Change workspace</a>
+        </div>
     </header>
 
     <div class="suite-body">
         <aside class="suite-nav">
-            @foreach (var module in _modules)
-            {
-                <NavLink href="@module.Route"
-                         Match="@(module.Route == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)"
-                         class="suite-nav-link">
-                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon(module.Id))</span>
-                    <span>@module.Title</span>
+            <section class="suite-nav-section">
+                <div class="suite-nav-section-label">Workspace</div>
+                <a href="/workspace" class="suite-nav-link @(IsWorkspaceOverviewActive() ? "active" : null)">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("home"))</span>
+                    <span>Home</span>
+                </a>
+                <NavLink href="/workspace/work" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("work"))</span>
+                    <span>Work</span>
                 </NavLink>
-            }
+                <NavLink href="/workspace/agents" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("agents"))</span>
+                    <span>Agents</span>
+                </NavLink>
+                <NavLink href="/workspace/tickers" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("tickers"))</span>
+                    <span>Tickers</span>
+                </NavLink>
+                <NavLink href="/workspace/sessions" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("sessions"))</span>
+                    <span>Sessions</span>
+                </NavLink>
+            </section>
+
+            <section class="suite-nav-section">
+                <div class="suite-nav-section-label">Global</div>
+                <NavLink href="/agents" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("agents"))</span>
+                    <span>Agents</span>
+                </NavLink>
+                <NavLink href="/tickers" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("tickers"))</span>
+                    <span>Tickers</span>
+                </NavLink>
+                <NavLink href="/sessions" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("sessions"))</span>
+                    <span>Sessions</span>
+                </NavLink>
+            </section>
+
+            <section class="suite-nav-section">
+                <div class="suite-nav-section-label">Suite</div>
+                <NavLink href="/dashboards" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("dashboards"))</span>
+                    <span>Dashboards</span>
+                </NavLink>
+                <NavLink href="/config" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("config"))</span>
+                    <span>Config</span>
+                </NavLink>
+                <NavLink href="/extensions" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("extensions"))</span>
+                    <span>Extensions</span>
+                </NavLink>
+                <NavLink href="/settings" Match="NavLinkMatch.Prefix" class="suite-nav-link">
+                    <span class="suite-nav-icon" aria-hidden="true">@((MarkupString)GetNavIcon("settings"))</span>
+                    <span>Settings</span>
+                </NavLink>
+            </section>
         </aside>
 
         <main class="suite-content">
@@ -35,19 +93,20 @@
 </div>
 
 @code {
-    private IReadOnlyList<SuiteModuleDescriptor> _modules = Array.Empty<SuiteModuleDescriptor>();
+    private CopilotWorkspace? _activeWorkspace;
+    private string _currentRelativePath = string.Empty;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        _modules = ModuleProviders
-            .SelectMany(provider => provider.GetModules())
-            .OrderBy(module => module.Order)
-            .ToArray();
+        _currentRelativePath = GetRelativePath();
+        Navigation.LocationChanged += HandleLocationChanged;
+        _activeWorkspace = await WorkService.GetActiveWorkspaceAsync();
     }
 
     private static string GetNavIcon(string moduleId) => moduleId switch
     {
-        "workspaces" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5-9 4.5L3 7.5Z"/><path d="M6 9.2V15l6 3 6-3V9.2"/></svg>""",
+        "home" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M6 9.8V20h12V9.8"/></svg>""",
+        "workspace" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5-9 4.5L3 7.5Z"/><path d="M6 9.2V15l6 3 6-3V9.2"/></svg>""",
         "work" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 6V4h6v2"/><path d="M4 12h16"/></svg>""",
         "dashboards" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-4"/></svg>""",
         "tickers" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2.5"/><path d="M9 3h6"/></svg>""",
@@ -58,4 +117,27 @@
         "extensions" => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 8V5a2 2 0 1 1 4 0v3"/><path d="M12 8h3a2 2 0 1 1 0 4h-3"/><path d="M12 12v3a2 2 0 1 1-4 0v-3"/><path d="M8 12H5a2 2 0 1 1 0-4h3"/><path d="M8 8h4v4H8z"/></svg>""",
         _ => """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/></svg>"""
     };
+
+    private bool IsWorkspaceOverviewActive() =>
+        string.Equals(_currentRelativePath, "workspace", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(_currentRelativePath, "workspaces", StringComparison.OrdinalIgnoreCase);
+
+    private string GetRelativePath()
+    {
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var queryIndex = relativePath.IndexOf('?');
+        return (queryIndex >= 0 ? relativePath[..queryIndex] : relativePath).Trim('/');
+    }
+
+    private async void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _currentRelativePath = GetRelativePath();
+        _activeWorkspace = await WorkService.GetActiveWorkspaceAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= HandleLocationChanged;
+    }
 }

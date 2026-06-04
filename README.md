@@ -161,8 +161,6 @@ GHCPSuite/
 |-- Services/
 |-- wwwroot/
 |-- Program.cs
-|-- customSettings.json
-|-- suiteData.json
 `-- README.md
 ```
 
@@ -176,8 +174,8 @@ GHCPSuite/
 ### Important root files
 
 - `Program.cs` - service registration and app startup
-- `customSettings.json` - user-editable suite settings
-- `suiteData.json` - suite-owned persisted work data
+- `%USERPROFILE%\.ghcpsuite\customSettings.json` - user-editable suite settings
+- `%USERPROFILE%\.ghcpsuite\suiteData.json` - suite-owned persisted work data
 
 ---
 
@@ -219,7 +217,7 @@ dotnet run --urls http://localhost:5184
 
 ## Configuration
 
-Settings are loaded from `customSettings.json` under the `CopilotSuite` section.
+Settings are loaded from `%USERPROFILE%\.ghcpsuite\customSettings.json` under the `CopilotSuite` section.
 
 Example:
 
@@ -259,7 +257,7 @@ The root folder under which managed workspaces live.
 - new workspaces are created here
 - available folders are discovered here
 - ignored folders are tracked relative to this workflow
-- each managed workspace gets a dedicated `.ghcpsuite` folder for suite-owned assets
+- each managed workspace gets a dedicated folder inside `%USERPROFILE%\.ghcpsuite` for suite-owned assets
 
 #### `StartupDirectory`
 
@@ -277,15 +275,15 @@ The other path settings allow the app to find local Copilot files and state in n
 
 ## Data and storage
 
-The app uses two main local files:
+The app uses two main local files inside the per-user suite home:
 
 ### `customSettings.json`
 
-User-edited settings file. The Settings page reads and writes this file.
+User-edited settings file. The Settings page reads and writes this file at `%USERPROFILE%\.ghcpsuite\customSettings.json`.
 
 ### `suiteData.json`
 
-Suite-owned persistence file. It stores:
+Suite-owned persistence file. It stores data at `%USERPROFILE%\.ghcpsuite\suiteData.json`.
 
 - workspaces
 - ignored workspace folders
@@ -304,43 +302,43 @@ It now also persists:
 - workspace-cloned agent metadata
 - ticker clone provenance
 
-### Workspace-local suite folder
+### Per-workspace suite folder
 
-Each managed workspace keeps suite-owned artifacts inside:
+Each managed workspace keeps suite-owned artifacts in its own folder under the suite home:
 
 ```text
-<workspace>\.ghcpsuite\
+%USERPROFILE%\.ghcpsuite\<workspace-name>\
 ```
 
 The suite currently scaffolds:
 
 ```text
-<workspace>\.ghcpsuite\agents\
-<workspace>\.ghcpsuite\init\
-<workspace>\.ghcpsuite\tickers\
+%USERPROFILE%\.ghcpsuite\<workspace-name>\agents\
+%USERPROFILE%\.ghcpsuite\<workspace-name>\init\
+%USERPROFILE%\.ghcpsuite\<workspace-name>\tickers\
 ```
 
-This keeps suite-managed files out of the workspace root so the project directory stays cleaner.
+This keeps suite-managed files out of the project tree while preserving the selected workspace root as the execution directory.
 
-Legacy `.ghcp-suite` folders are migrated to `.ghcpsuite` when the suite touches a managed workspace.
+Legacy `<workspace>\.ghcpsuite` and `<workspace>\.ghcp-suite` folders are migrated into the suite home when the suite touches a managed workspace.
 
 Workspace-cloned agent definitions are stored canonically in:
 
 ```text
-<workspace>\.ghcpsuite\agents\<workspace-agent-name>.agent.md
+%USERPROFILE%\.ghcpsuite\<workspace-name>\agents\<workspace-agent-name>.agent.md
 ```
 
 For Copilot CLI runtime compatibility, the suite mirrors those files into the Copilot user agent store before execution. The workspace copy remains the source of truth.
 
-### Workspace-local ticker output
+### Workspace ticker output
 
-Ticker output is written into the workspace itself:
+Ticker output is written into the workspace's suite data folder:
 
 ```text
-<workspace>\.ghcpsuite\tickers\<ticker-name>\YYYYMMDD-HHMMSS.md
+%USERPROFILE%\.ghcpsuite\<workspace-name>\tickers\<ticker-name>\YYYYMMDD-HHMMSS.md
 ```
 
-This keeps recurring prompt output close to the workspace it belongs to.
+This keeps recurring prompt output in the permanent suite data home while still running the prompt in the actual workspace root.
 
 ### Concurrency note
 
@@ -350,17 +348,22 @@ This keeps recurring prompt output close to the workspace it belongs to.
 
 ## Navigation and page guide
 
-The app shell is built from module descriptors returned by `ISuiteModuleProvider`. The default navigation is:
+The app shell uses a grouped left navigation. The default navigation is:
 
-- Workspaces
-- Work
-- Dashboards
-- Tickers
-- Agents
-- Sessions
-- Config
-- Settings
-- Extensions
+- **Workspace** (collapsible group)
+  - Work
+  - Agents
+  - Tickers
+  - Sessions
+- **Global**
+  - Agents
+  - Tickers
+  - Sessions
+- **Suite**
+  - Dashboards
+  - Config
+  - Settings
+  - Extensions
 
 Below is the purpose of each page, its major sections, and how to use it.
 
@@ -451,9 +454,9 @@ Quick panel for the currently active workspace.
 Actions:
 
 - **Enter workspace**
-- **Global work view**
+- **Open work view**
 
-Use this when you want to move quickly between the default workspace context and the broader cross-workspace portfolio.
+Use this when you want to move quickly between workspace selection and the current workspace's execution surfaces.
 
 ### Best usage pattern
 
@@ -494,7 +497,7 @@ Actions:
 - **Create ticker**
 - **Open folder**
 - **Workspace dashboard**
-- **Global work**
+- **Workspace work**
 
 Use **Start GHCP session** when you want to launch a brand new Copilot CLI session directly inside the workspace folder.
 
@@ -596,38 +599,36 @@ Typical flow:
 
 ## Work page (`/work`)
 
-**Purpose:** cross-workspace portfolio and planning surface.
+**Purpose:** workspace-scoped workboard for the active workspace.
 
-This page intentionally sits **above** individual workspaces. It should help answer:
+This page stays **inside** the current workspace. It should help answer:
 
-- What should I work on next?
-- Which workspace is blocked or stale?
-- What patterns exist across all workspaces?
-- What saved operating views should I reopen?
+- What needs attention in this workspace right now?
+- Which sessions are active or blocked here?
+- What recurring automation exists in this workspace?
+- Which agents and activity have been recorded for this workspace?
 
 ### Sections
 
-#### Cross-workspace portfolio
+#### Workspace workboard
 
-Introductory panel explaining the split between:
-
-- **Workspace pages** for execution
-- **Work** for cross-workspace triage
+Introductory panel explaining that this page only shows work tied to the active workspace.
 
 Actions:
 
-- **Open active workspace**
-- **Open dashboards**
-- **Browse sessions**
+- **Open overview**
+- **Open workspace sessions**
+- **Open workspace tickers**
+- **Open workspace agents**
 
 #### Metrics row
 
 Shows:
 
-- managed workspaces
+- sessions
 - active work
 - blocked work
-- stalled work
+- done work
 - resumed this week
 - recurring runs
 - tracked agents
@@ -1050,7 +1051,7 @@ Actions:
 
 ### Notes
 
-- suite-managed workspace assets belong under `<workspace>\.ghcpsuite\`
+- suite-managed workspace assets belong under `%USERPROFILE%\.ghcpsuite\<workspace-name>\`
 - workspace clones are mirrored into `~/.copilot/agents\ghcpsuite\...` only so Copilot CLI can run them without polluting the workspace root
 - Copilot-native global custom agents are still typically discovered from `~/.copilot/agents` or legacy `.github/agents`
 - built-in agents come from the Copilot CLI package definitions
@@ -1131,7 +1132,7 @@ Use this page when you need to inspect or edit configuration without manually hu
 
 ### Sections
 
-#### `customSettings.json`
+#### Suite settings file
 
 Editable fields for runtime configuration.
 
@@ -1159,7 +1160,7 @@ Use this when diagnosing why a file, session, or config source is not showing up
 
 #### Session categories
 
-Explains that categories are stored in `customSettings.json` and managed primarily from the Sessions page.
+Explains that categories are stored in `%USERPROFILE%\.ghcpsuite\customSettings.json` and managed primarily from the Sessions page.
 
 ### Best usage pattern
 
@@ -1226,21 +1227,20 @@ Standard Blazor error surface for unhandled exceptions.
 
 Use this for normal day-to-day work.
 
-1. Open **Workspaces**
+1. Open **Change workspace**
 2. Select or create a workspace
 3. Open the workspace detail page
 4. Start a GHCP session from there
-5. Resume previous sessions from the same workspace as needed
-6. Use workspace files, tickers, and activity to stay oriented
+5. Use **Workspace > Work**, **Workspace > Sessions**, **Workspace > Tickers**, and **Workspace > Agents** to stay inside that context
 
 ### 2. Portfolio triage flow
 
 Use this when you want to decide where to focus next.
 
-1. Open **Work**
-2. Review **Needs attention**
-3. Compare workspaces in **Workspace portfolio**
-4. Jump into the chosen workspace
+1. Open **Dashboards**
+2. Review workspace-level telemetry
+3. Choose the workspace to switch into
+4. Return to **Workspace > Work** for scoped execution
 
 ### 3. Telemetry/reporting flow
 
@@ -1301,7 +1301,7 @@ When a ticker runs, the service:
 4. marks the ticker as running
 5. executes `copilot.exe` in non-interactive mode
 6. optionally adds `--agent <name>`
-7. writes output to a workspace-local Markdown file
+7. writes output to the workspace's suite data folder
 8. records ticker run history
 9. records activity history
 
@@ -1345,8 +1345,8 @@ The suite distinguishes:
 
 Workspace clones are:
 
-1. stored in `<workspace>\.ghcpsuite\agents`
-2. tracked in `suiteData.json` with workspace-specific enabled state
+1. stored in `%USERPROFILE%\.ghcpsuite\<workspace-name>\agents`
+2. tracked in `%USERPROFILE%\.ghcpsuite\suiteData.json` with workspace-specific enabled state
 3. mirrored into the Copilot user-agents area right before launch or ticker execution so they remain runnable
 
 Activity for agent runs is recorded into suite work history so the app can surface:
@@ -1430,7 +1430,7 @@ Future extension directions could include:
 
 #### `CopilotWorkDataService`
 
-Owns `suiteData.json` read/write and normalization.
+Owns `%USERPROFILE%\.ghcpsuite\suiteData.json` read/write and normalization.
 
 #### `CopilotWorkService`
 
@@ -1438,7 +1438,7 @@ Owns aggregation and higher-level work/workspace/dashboard behaviors.
 
 #### `CopilotSettingsService`
 
-Owns `customSettings.json` reads/writes and settings-facing operations.
+Owns `%USERPROFILE%\.ghcpsuite\customSettings.json` reads/writes and settings-facing operations.
 
 ### Launch/resume responsibilities
 

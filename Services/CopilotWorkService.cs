@@ -32,7 +32,8 @@ public interface ICopilotWorkService
 public sealed class CopilotWorkService(
     ICopilotWorkDataService workDataService,
     ICopilotSessionService sessionService,
-    ICopilotSettingsService settingsService) : ICopilotWorkService
+    ICopilotSettingsService settingsService,
+    ICopilotEnvironmentService environmentService) : ICopilotWorkService
 {
     private static readonly StringComparer TextComparer = StringComparer.OrdinalIgnoreCase;
 
@@ -41,7 +42,7 @@ public sealed class CopilotWorkService(
         var data = await workDataService.GetDataAsync(cancellationToken);
         foreach (var workspace in data.Workspaces.Where(workspace => !string.IsNullOrWhiteSpace(workspace.RootPath)))
         {
-            CopilotWorkspaceStorage.EnsureWorkspaceStructure(NormalizeWorkspaceRoot(workspace.RootPath));
+            EnsureWorkspaceDataStructure(workspace);
         }
 
         return data.Workspaces.Select(CloneWorkspace).ToArray();
@@ -61,7 +62,7 @@ public sealed class CopilotWorkService(
             .FirstOrDefault();
         if (workspace is not null)
         {
-            CopilotWorkspaceStorage.EnsureWorkspaceStructure(workspace.RootPath);
+            EnsureWorkspaceDataStructure(workspace);
         }
 
         return workspace;
@@ -77,7 +78,7 @@ public sealed class CopilotWorkService(
         }
 
         var clone = CloneWorkspace(workspace);
-        CopilotWorkspaceStorage.EnsureWorkspaceStructure(clone.RootPath);
+        EnsureWorkspaceDataStructure(clone);
         return clone;
     }
 
@@ -107,11 +108,12 @@ public sealed class CopilotWorkService(
                 : workspace.Id.Trim(),
             Name = workspace.Name.Trim(),
             RootPath = normalizedPath,
+            DataRootPath = ResolveWorkspaceDataRootPath(workspace, matchingPathWorkspace),
             Description = string.IsNullOrWhiteSpace(workspace.Description) ? null : workspace.Description.Trim(),
             CreatedAt = workspace.CreatedAt == default ? DateTimeOffset.UtcNow : workspace.CreatedAt,
             UpdatedAt = DateTimeOffset.UtcNow
         };
-        CopilotWorkspaceStorage.EnsureWorkspaceStructure(item.RootPath);
+        EnsureWorkspaceDataStructure(item);
 
         var existing = data.Workspaces.FindIndex(candidate => TextComparer.Equals(candidate.Id, item.Id));
         if (existing >= 0)
@@ -650,6 +652,7 @@ public sealed class CopilotWorkService(
         Id = source.Id,
         Name = source.Name,
         RootPath = source.RootPath,
+        DataRootPath = source.DataRootPath,
         Description = source.Description,
         CreatedAt = source.CreatedAt,
         UpdatedAt = source.UpdatedAt
@@ -824,5 +827,39 @@ public sealed class CopilotWorkService(
         return string.IsNullOrWhiteSpace(settings.WorkspaceRootDirectory)
             ? settings.StartupDirectory
             : settings.WorkspaceRootDirectory;
+    }
+
+    private void EnsureWorkspaceDataStructure(CopilotWorkspace workspace)
+    {
+        if (string.IsNullOrWhiteSpace(workspace.DataRootPath))
+        {
+            workspace.DataRootPath = ResolveWorkspaceDataRootPath(workspace, null);
+        }
+
+        CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
+    }
+
+    private string ResolveWorkspaceDataRootPath(CopilotWorkspace workspace, CopilotWorkspace? existingWorkspace)
+    {
+        var existingPath = NormalizeWorkspaceRoot(existingWorkspace?.DataRootPath ?? workspace.DataRootPath);
+        if (!string.IsNullOrWhiteSpace(existingPath))
+        {
+            return existingPath;
+        }
+
+        var rootName = Path.GetFileName(NormalizeWorkspaceRoot(workspace.RootPath));
+        if (string.IsNullOrWhiteSpace(rootName))
+        {
+            rootName = workspace.Name;
+        }
+
+        var suiteHome = environmentService.GetPaths().SuiteHome;
+        var candidate = NormalizeWorkspaceRoot(Path.Combine(suiteHome, rootName));
+        if (!File.Exists(candidate) && !Directory.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        return NormalizeWorkspaceRoot(Path.Combine(suiteHome, $"{rootName}-{workspace.Id[..8]}"));
     }
 }

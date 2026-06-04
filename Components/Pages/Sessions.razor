@@ -1,12 +1,14 @@
 @page "/sessions"
+@page "/workspace/sessions"
 @inject ICopilotSessionService SessionService
 @inject ICopilotResumeService ResumeService
 @inject ICopilotSettingsService SettingsService
 @inject ICopilotWorkService WorkService
+@inject NavigationManager Navigation
 
 <PageTitle>GHCP Suite | Sessions</PageTitle>
 
-<h1>Sessions</h1>
+<h1>@(_isWorkspaceScope ? $"{_activeWorkspace?.Name ?? "Workspace"} sessions" : "Sessions")</h1>
 
 @if (_loading)
 {
@@ -23,7 +25,9 @@ else
 {
     <section class="panel-card">
         <div class="section-title">Organize work</div>
-        <p class="panel-copy">Filter sessions, group them by project/category/status, and save commonly used views.</p>
+        <p class="panel-copy">@(_isWorkspaceScope
+            ? "Filter sessions linked to the current workspace, group them by project/category/status, and save commonly used views."
+            : "Filter sessions, group them by project/category/status, and save commonly used views.")</p>
         @if (!string.IsNullOrWhiteSpace(_feedbackMessage))
         {
             <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
@@ -200,11 +204,13 @@ else
     [SupplyParameterFromQuery(Name = "groupBy")] public string? GroupBy { get; set; }
 
     private bool _loading = true;
+    private bool _isWorkspaceScope;
     private IReadOnlyList<CopilotSessionSummary> _sessions = Array.Empty<CopilotSessionSummary>();
     private IReadOnlyList<CopilotSessionSummary> _filteredSessions = Array.Empty<CopilotSessionSummary>();
     private IReadOnlyList<CopilotSavedView> _savedViews = Array.Empty<CopilotSavedView>();
     private IReadOnlyList<string> _knownCategories = Array.Empty<string>();
     private IReadOnlyList<string> _knownProjects = Array.Empty<string>();
+    private CopilotWorkspace? _activeWorkspace;
     private readonly Dictionary<string, string> _categoryDrafts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _categorySelections = new(StringComparer.OrdinalIgnoreCase);
     private string _searchFilter = string.Empty;
@@ -234,7 +240,20 @@ else
 
     private async Task LoadAsync()
     {
-        _sessions = await SessionService.GetSessionsAsync();
+        _isWorkspaceScope = IsWorkspaceScopeRoute();
+        _activeWorkspace = _isWorkspaceScope ? await WorkService.GetActiveWorkspaceAsync() : null;
+        if (_isWorkspaceScope && _activeWorkspace is null)
+        {
+            Navigation.NavigateTo("/", replace: true);
+            return;
+        }
+
+        var allSessions = await SessionService.GetSessionsAsync();
+        _sessions = _isWorkspaceScope
+            ? allSessions
+                .Where(session => CopilotWorkService.WorkspaceMatches(_activeWorkspace!, session.WorkingDirectory))
+                .ToArray()
+            : allSessions;
         _savedViews = await WorkService.GetSavedViewsAsync();
         _categoryDrafts.Clear();
         _categorySelections.Clear();
@@ -510,4 +529,36 @@ else
     }
 
     private sealed record SessionGroup(string Key, IReadOnlyList<CopilotSessionSummary> Sessions);
+
+    private string BuildViewUrl(CopilotSavedView view)
+    {
+        var query = new List<string> { $"groupBy={Uri.EscapeDataString(view.GroupBy)}" };
+        if (!string.IsNullOrWhiteSpace(view.Status))
+        {
+            query.Add($"status={Uri.EscapeDataString(view.Status)}");
+        }
+        if (!string.IsNullOrWhiteSpace(view.Project))
+        {
+            query.Add($"project={Uri.EscapeDataString(view.Project)}");
+        }
+        if (!string.IsNullOrWhiteSpace(view.Category))
+        {
+            query.Add($"category={Uri.EscapeDataString(view.Category)}");
+        }
+        if (!string.IsNullOrWhiteSpace(view.SearchText))
+        {
+            query.Add($"search={Uri.EscapeDataString(view.SearchText)}");
+        }
+
+        var basePath = _isWorkspaceScope ? "/workspace/sessions" : "/sessions";
+        return $"{basePath}?{string.Join("&", query)}";
+    }
+
+    private bool IsWorkspaceScopeRoute()
+    {
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var queryIndex = relativePath.IndexOf('?');
+        var path = (queryIndex >= 0 ? relativePath[..queryIndex] : relativePath).Trim('/');
+        return string.Equals(path, "workspace/sessions", StringComparison.OrdinalIgnoreCase);
+    }
 }

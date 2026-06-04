@@ -11,7 +11,9 @@ public interface ICopilotWorkDataService
     Task SaveDataAsync(SuiteDataDocument data, CancellationToken cancellationToken = default);
 }
 
-public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : ICopilotWorkDataService
+public sealed class CopilotWorkDataService(
+    IHostEnvironment hostEnvironment,
+    ICopilotEnvironmentService environmentService) : ICopilotWorkDataService
 {
     private readonly SemaphoreSlim _fileGate = new(1, 1);
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -20,7 +22,12 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    public string GetDataFilePath() => Path.Combine(hostEnvironment.ContentRootPath, "suiteData.json");
+    public string GetDataFilePath()
+    {
+        var paths = environmentService.GetPaths();
+        CopilotSuiteStorage.EnsureSuiteHome(paths.SuiteHome);
+        return paths.SuiteDataPath;
+    }
 
     public async Task<SuiteDataDocument> GetDataAsync(CancellationToken cancellationToken = default)
     {
@@ -28,14 +35,15 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
         var filePath = GetDataFilePath();
         try
         {
+            await MigrateLegacyDataAsync(filePath, cancellationToken);
             if (!File.Exists(filePath))
             {
-                return CreateDefaultDocument();
+                return CreateDefaultDocument(environmentService.GetPaths().SuiteHome);
             }
 
             await using var stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var data = await JsonSerializer.DeserializeAsync<SuiteDataDocument>(stream, SerializerOptions, cancellationToken);
-            return Normalize(data ?? new SuiteDataDocument());
+            return Normalize(data ?? new SuiteDataDocument(), environmentService.GetPaths().SuiteHome);
         }
         finally
         {
@@ -49,8 +57,10 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
         var filePath = GetDataFilePath();
         try
         {
+            await MigrateLegacyDataAsync(filePath, cancellationToken);
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
             await using var stream = File.Open(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
-            await JsonSerializer.SerializeAsync(stream, Normalize(data), SerializerOptions, cancellationToken);
+            await JsonSerializer.SerializeAsync(stream, Normalize(data, environmentService.GetPaths().SuiteHome), SerializerOptions, cancellationToken);
         }
         finally
         {
@@ -58,15 +68,16 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
         }
     }
 
-    private static SuiteDataDocument CreateDefaultDocument() => Normalize(new SuiteDataDocument());
+    private static SuiteDataDocument CreateDefaultDocument(string suiteHome) => Normalize(new SuiteDataDocument(), suiteHome);
 
-    private static SuiteDataDocument Normalize(SuiteDataDocument data)
+    private static SuiteDataDocument Normalize(SuiteDataDocument data, string suiteHome)
     {
-        data.Workspaces = NormalizeWorkspaces(data.Workspaces);
+        data.Workspaces = NormalizeWorkspaces(data.Workspaces, suiteHome);
+        var workspacesById = data.Workspaces.ToDictionary(workspace => workspace.Id, StringComparer.OrdinalIgnoreCase);
         data.IgnoredWorkspaceFolders = NormalizeIgnoredWorkspaceFolders(data.IgnoredWorkspaceFolders);
         data.WorkspaceAgents = NormalizeWorkspaceAgents(data.WorkspaceAgents);
-        data.Tickers = NormalizeTickers(data.Tickers);
-        data.TickerRuns = NormalizeTickerRuns(data.TickerRuns);
+        data.Tickers = NormalizeTickers(data.Tickers, workspacesById);
+        data.TickerRuns = NormalizeTickerRuns(data.TickerRuns, workspacesById);
         data.SessionWork = NormalizeSessionWork(data.SessionWork);
         data.SavedViews = NormalizeSavedViews(data.SavedViews);
         data.Templates = NormalizeTemplates(data.Templates);
@@ -77,7 +88,9 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
         return data;
     }
 
-    private static List<CopilotTickerDefinition> NormalizeTickers(List<CopilotTickerDefinition>? source)
+    private static List<CopilotTickerDefinition> NormalizeTickers(
+        List<CopilotTickerDefinition>? source,
+        IReadOnlyDictionary<string, CopilotWorkspace> workspacesById)
     {
         return (source ?? [])
             .Where(ticker => !string.IsNullOrWhiteSpace(ticker.Name) && !string.IsNullOrWhiteSpace(ticker.WorkspaceId) && !string.IsNullOrWhiteSpace(ticker.Prompt))
@@ -94,7 +107,7 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
                 ticker.CreatedAt = ticker.CreatedAt == default ? DateTimeOffset.UtcNow : ticker.CreatedAt;
                 ticker.UpdatedAt = ticker.UpdatedAt == default ? ticker.CreatedAt : ticker.UpdatedAt;
                 ticker.LastStatus = NullIfBlank(ticker.LastStatus);
-                ticker.LastOutputPath = NullIfBlank(ticker.LastOutputPath);
+                ticker.LastOutputPath = NormalizeWorkspaceAssetPath(ticker.LastOutputPath, ticker.WorkspaceId, workspacesById);
                 ticker.LastError = NullIfBlank(ticker.LastError);
                 if (ticker.Enabled && ticker.NextRunAt is null)
                 {
@@ -140,7 +153,9 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
             .ToList();
     }
 
-    private static List<CopilotTickerRun> NormalizeTickerRuns(List<CopilotTickerRun>? source)
+    private static List<CopilotTickerRun> NormalizeTickerRuns(
+        List<CopilotTickerRun>? source,
+        IReadOnlyDictionary<string, CopilotWorkspace> workspacesById)
     {
         return (source ?? [])
             .Where(run => !string.IsNullOrWhiteSpace(run.TickerId))
@@ -152,7 +167,7 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
                 run.WorkspaceId = run.WorkspaceId?.Trim() ?? string.Empty;
                 run.WorkspaceName = run.WorkspaceName?.Trim() ?? string.Empty;
                 run.Status = string.IsNullOrWhiteSpace(run.Status) ? "Queued" : run.Status.Trim();
-                run.OutputPath = NullIfBlank(run.OutputPath);
+                run.OutputPath = NormalizeWorkspaceAssetPath(run.OutputPath, run.WorkspaceId, workspacesById);
                 run.Summary = NullIfBlank(run.Summary);
                 run.StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt;
                 run.CompletedAt = run.CompletedAt == default ? run.StartedAt : run.CompletedAt;
@@ -173,15 +188,17 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
             .ToList();
     }
 
-    private static List<CopilotWorkspace> NormalizeWorkspaces(List<CopilotWorkspace>? source)
+    private static List<CopilotWorkspace> NormalizeWorkspaces(List<CopilotWorkspace>? source, string suiteHome)
     {
+        var usedDataRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         return (source ?? [])
             .Where(workspace => !string.IsNullOrWhiteSpace(workspace.Name) && !string.IsNullOrWhiteSpace(workspace.RootPath))
             .Select(workspace =>
             {
                 workspace.Id = string.IsNullOrWhiteSpace(workspace.Id) ? Guid.NewGuid().ToString("N") : workspace.Id.Trim();
                 workspace.Name = workspace.Name.Trim();
-                workspace.RootPath = workspace.RootPath.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                workspace.RootPath = NormalizePath(workspace.RootPath);
                 workspace.Description = NullIfBlank(workspace.Description);
                 workspace.CreatedAt = workspace.CreatedAt == default ? DateTimeOffset.UtcNow : workspace.CreatedAt;
                 workspace.UpdatedAt = workspace.UpdatedAt == default ? workspace.CreatedAt : workspace.UpdatedAt;
@@ -189,6 +206,12 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
             })
             .GroupBy(workspace => workspace.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(item => item.UpdatedAt).First())
+            .Select(workspace =>
+            {
+                workspace.DataRootPath = ResolveWorkspaceDataRoot(workspace, suiteHome, usedDataRoots);
+                usedDataRoots.Add(workspace.DataRootPath);
+                return workspace;
+            })
             .OrderBy(workspace => workspace.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -446,6 +469,128 @@ public sealed class CopilotWorkDataService(IHostEnvironment hostEnvironment) : I
             "status" => "status",
             _ => "project"
         };
+    }
+
+    private async Task MigrateLegacyDataAsync(string targetPath, CancellationToken cancellationToken)
+    {
+        if (File.Exists(targetPath))
+        {
+            return;
+        }
+
+        var legacyPath = CopilotSuiteStorage.GetLegacyDataFilePath(hostEnvironment.ContentRootPath);
+        if (!File.Exists(legacyPath))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+
+        await using var sourceStream = File.Open(legacyPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        await using var destinationStream = File.Create(targetPath);
+        await sourceStream.CopyToAsync(destinationStream, cancellationToken);
+    }
+
+    private static string ResolveWorkspaceDataRoot(CopilotWorkspace workspace, string suiteHome, ISet<string> usedDataRoots)
+    {
+        var existing = NormalizePath(workspace.DataRootPath);
+        if (!string.IsNullOrWhiteSpace(existing))
+        {
+            return existing;
+        }
+
+        var preferredName = GetWorkspaceDirectoryName(workspace);
+        var preferredPath = NormalizePath(Path.Combine(suiteHome, preferredName));
+        if (!usedDataRoots.Contains(preferredPath)
+            && !string.Equals(preferredName, CopilotSuiteStorage.SettingsFileName, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(preferredName, CopilotSuiteStorage.DataFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return preferredPath;
+        }
+
+        return NormalizePath(Path.Combine(suiteHome, $"{preferredName}-{workspace.Id[..8]}"));
+    }
+
+    private static string GetWorkspaceDirectoryName(CopilotWorkspace workspace)
+    {
+        var sourceName = Path.GetFileName(NormalizePath(workspace.RootPath));
+        if (string.IsNullOrWhiteSpace(sourceName))
+        {
+            sourceName = workspace.Name;
+        }
+
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var sanitized = new string(sourceName
+            .Trim()
+            .Select(character => invalidCharacters.Contains(character) ? '-' : character)
+            .ToArray())
+            .TrimEnd('.', ' ')
+            .Trim();
+
+        if (string.IsNullOrWhiteSpace(sanitized))
+        {
+            sanitized = $"workspace-{workspace.Id[..8]}";
+        }
+
+        return sanitized;
+    }
+
+    private static string? NormalizeWorkspaceAssetPath(
+        string? path,
+        string? workspaceId,
+        IReadOnlyDictionary<string, CopilotWorkspace> workspacesById)
+    {
+        var normalizedPath = NullIfBlank(path);
+        if (string.IsNullOrWhiteSpace(normalizedPath) || string.IsNullOrWhiteSpace(workspaceId))
+        {
+            return normalizedPath;
+        }
+
+        if (!workspacesById.TryGetValue(workspaceId, out var workspace))
+        {
+            return normalizedPath;
+        }
+
+        foreach (var legacyRoot in CopilotWorkspaceStorage.GetLegacyWorkspaceSuiteRoots(workspace.RootPath))
+        {
+            if (!normalizedPath.StartsWith(legacyRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var relativePath = normalizedPath[legacyRoot.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.IsNullOrWhiteSpace(relativePath)
+                ? workspace.DataRootPath
+                : Path.Combine(workspace.DataRootPath, relativePath);
+        }
+
+        return normalizedPath;
+    }
+
+    private static string NormalizePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        try
+        {
+            return Path.GetFullPath(trimmed);
+        }
+        catch (ArgumentException)
+        {
+            return trimmed;
+        }
+        catch (NotSupportedException)
+        {
+            return trimmed;
+        }
+        catch (PathTooLongException)
+        {
+            return trimmed;
+        }
     }
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

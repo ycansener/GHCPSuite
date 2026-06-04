@@ -13,9 +13,9 @@
 else
 {
     <section class="panel-card">
-        <div class="section-title">customSettings.json</div>
+        <div class="section-title">Suite settings</div>
         <p class="panel-copy">
-            These values are stored in <code>@_settingsFilePath</code>. Leave a field blank to keep automatic path discovery.
+            These values are stored in <code>@_settingsFilePath</code> under the suite home. Leave a field blank to keep automatic path discovery.
             The app reads this file on startup and reloads it when the file changes.
         </p>
 
@@ -80,6 +80,9 @@ else
         <div class="kv-grid">
             <div class="kv-item"><span>Workspace root</span><strong>@GetWorkspaceRoot()</strong></div>
             <div class="kv-item"><span>User profile</span><strong>@_paths.UserProfile</strong></div>
+            <div class="kv-item"><span>Suite home</span><strong>@_paths.SuiteHome</strong></div>
+            <div class="kv-item"><span>Suite settings</span><strong>@_paths.SuiteSettingsPath</strong></div>
+            <div class="kv-item"><span>Suite data</span><strong>@_paths.SuiteDataPath</strong></div>
             <div class="kv-item"><span>Copilot home</span><strong>@_paths.CopilotHome</strong></div>
             <div class="kv-item"><span>Session state</span><strong>@_paths.SessionStateDirectory</strong></div>
             <div class="kv-item"><span>Session store</span><strong>@_paths.SessionStoreDatabasePath</strong></div>
@@ -124,7 +127,7 @@ else
             await Task.Delay(250);
             _paths = EnvironmentService.GetPaths();
             _saveSucceeded = true;
-            _message = "Saved customSettings.json.";
+            _message = "Saved suite settings.";
         }
         catch (IOException ex)
         {
@@ -142,7 +145,7 @@ else
     {
         await LoadAsync();
         _saveSucceeded = true;
-        _message = "Reloaded settings from customSettings.json.";
+        _message = "Reloaded suite settings.";
     }
 
     private async Task LoadAsync()

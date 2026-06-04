@@ -6,7 +6,7 @@
 
 <PageTitle>GHCP Suite | Workspaces</PageTitle>
 
-<h1>Workspace selection</h1>
+<h1>Change workspace</h1>
 
 @if (_loading)
 {
@@ -50,7 +50,7 @@ else
     <section class="content-grid">
         <article class="panel-card">
             <div class="section-title">Choose a workspace</div>
-            <p class="panel-copy">This is now the main entry point. Pick a workspace to keep Copilot sessions tied to one root folder.</p>
+            <p class="panel-copy">Use this page when you want to switch the active workspace. The main navigation now opens the current workspace directly.</p>
             @if (_workspaces.Count == 0)
             {
                 <p class="empty-state">No workspaces yet. Create one to start scoped GHCP work.</p>
@@ -61,7 +61,11 @@ else
                 {
                     <div class="list-row">
                         <div>
-                            <div class="row-title"><a href="@GetWorkspaceUrl(workspace)">@workspace.Name</a></div>
+                            <div class="row-title">
+                                <a href="@GetWorkspaceUrl(workspace)"
+                                   @onclick:preventDefault="true"
+                                   @onclick="() => OpenWorkspaceAsync(workspace)">@workspace.Name</a>
+                            </div>
                             @if (!string.IsNullOrWhiteSpace(workspace.Description))
                             {
                                 <div class="row-description">@workspace.Description</div>
@@ -84,7 +88,7 @@ else
             {
                 <p class="feedback-banner @(_feedbackSucceeded ? "feedback-success" : "feedback-error")">@_feedbackMessage</p>
             }
-            <p class="panel-copy">New workspaces are created as folders under <code>@(WorkspaceRootDirectory ?? "(set this in Settings first)")</code>, and each managed workspace gets a dedicated <code>.ghcpsuite</code> folder for suite-owned assets.</p>
+            <p class="panel-copy">New workspaces are created under <code>@(WorkspaceRootDirectory ?? "(set this in Settings first)")</code>, while suite-managed data is stored permanently under the active user's <code>.ghcpsuite</code> home.</p>
             <div class="terminal-form">
                 <label>
                     <span>Name</span>
@@ -177,7 +181,11 @@ else
             <div class="section-title">Selected workspace</div>
             <div class="content-grid">
                 <div>
-                    <div class="row-title"><a href="@GetWorkspaceUrl(_activeWorkspace)">@_activeWorkspace.Name</a></div>
+                    <div class="row-title">
+                        <a href="@GetWorkspaceUrl(_activeWorkspace)"
+                           @onclick:preventDefault="true"
+                           @onclick="() => OpenWorkspaceAsync(_activeWorkspace)">@_activeWorkspace.Name</a>
+                    </div>
                     @if (!string.IsNullOrWhiteSpace(_activeWorkspace.Description))
                     {
                         <div class="row-description">@_activeWorkspace.Description</div>
@@ -186,7 +194,7 @@ else
                 </div>
                 <div class="row-side row-actions">
                     <a class="action-button action-button-small" href="@GetWorkspaceUrl(_activeWorkspace)">Enter workspace</a>
-                    <a class="action-button action-button-small action-button-muted" href="/work">Global work view</a>
+                    <a class="action-button action-button-small action-button-muted" href="/workspace/work">Open work view</a>
                 </div>
             </div>
         </section>
@@ -327,7 +335,7 @@ else
     private bool IsActiveWorkspace(CopilotWorkspace workspace) =>
         _activeWorkspace is not null && string.Equals(_activeWorkspace.Id, workspace.Id, StringComparison.OrdinalIgnoreCase);
 
-    private static string GetWorkspaceUrl(CopilotWorkspace workspace) => $"/workspaces/{Uri.EscapeDataString(workspace.Id)}";
+    private static string GetWorkspaceUrl(CopilotWorkspace workspace) => "/workspace";
 
     private string BuildWorkspacePath(string workspaceName)
     {

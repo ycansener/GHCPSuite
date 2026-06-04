@@ -1,23 +1,115 @@
 @page "/agents"
+@page "/workspace/agents"
 @inject ICopilotAgentCatalogService AgentCatalogService
 @inject ICopilotWorkspaceAgentService WorkspaceAgentService
 @inject ICopilotConfigEditorService ConfigEditorService
 @inject ICopilotAgentRunService AgentRunService
 @inject ICopilotWorkService WorkService
+@inject NavigationManager Navigation
 
 <PageTitle>GHCP Suite | Agents</PageTitle>
 
-<h1>Agents</h1>
+<h1>@(_isWorkspaceScope ? $"{_activeWorkspace?.Name ?? "Workspace"} agents" : "Agents")</h1>
 
 @if (_loading)
 {
     <p class="empty-state">Loading installed Copilot agent definitions...</p>
 }
+else if (_isWorkspaceScope)
+{
+    <section class="panel-card">
+        <div class="section-title">Workspace-linked agents</div>
+        <p class="panel-copy">
+            This page only shows agent definitions linked to <code>@(_activeWorkspace?.Name ?? "the active workspace")</code>.
+            Use the global Agents page to browse built-ins and clone additional agents into this workspace.
+        </p>
+        @if (!string.IsNullOrWhiteSpace(_editorMessage))
+        {
+            <p class="feedback-banner @(_editorSucceeded ? "feedback-success" : "feedback-error")">@_editorMessage</p>
+        }
+        <div class="panel-actions">
+            <a class="action-button action-button-muted" href="/agents">Open global agents</a>
+        </div>
+    </section>
+
+    <section class="panel-grid">
+        <article class="panel-card">
+            <div class="panel-label">Linked agents</div>
+            <div class="panel-metric">@_workspaceAgents.Count</div>
+            <div class="panel-copy">Agents cloned into this workspace.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Enabled</div>
+            <div class="panel-metric">@_workspaceAgents.Count(agent => agent.Enabled)</div>
+            <div class="panel-copy">Agents currently available for workspace use.</div>
+        </article>
+        <article class="panel-card">
+            <div class="panel-label">Disabled</div>
+            <div class="panel-metric">@_workspaceAgents.Count(agent => !agent.Enabled)</div>
+            <div class="panel-copy">Agents kept in the workspace but not active.</div>
+        </article>
+    </section>
+
+    <section class="panel-card">
+        <div class="section-title">Workspace agents</div>
+        @if (_workspaceAgents.Count == 0)
+        {
+            <p class="empty-state">No agents are linked to this workspace yet.</p>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Kind</th>
+                            <th>Model</th>
+                            <th>Tools</th>
+                            <th>Status</th>
+                            <th>Definition</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var agent in _workspaceAgents)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="row-title"><a href="@GetAgentUrl(agent)">@agent.DisplayName</a></div>
+                                    <div class="row-description">@agent.Description</div>
+                                    <div class="row-meta">@agent.Name</div>
+                                </td>
+                                <td><span class="status-pill @(agent.Kind == "Sidekick" ? "status-live" : "status-idle")">@agent.Kind</span></td>
+                                <td>@agent.Model</td>
+                                <td>@agent.ToolAccess</td>
+                                <td><span class="status-pill @(agent.Enabled ? "status-live" : "status-idle")">@(agent.Enabled ? "Enabled" : "Disabled")</span></td>
+                                <td class="truncate">@agent.DefinitionPath</td>
+                                <td>
+                                    <div class="inline-actions">
+                                        <button type="button" class="action-button action-button-small" @onclick="() => RunAgentAsync(agent)">Run</button>
+                                        <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => EditAgentAsync(agent)">Modify</button>
+                                        @if (!string.IsNullOrWhiteSpace(agent.WorkspaceAgentId))
+                                        {
+                                            <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => ToggleAgentAsync(agent)">
+                                                @(agent.Enabled ? "Disable" : "Enable")
+                                            </button>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
 else if (_visibleAgents.Count == 0)
 {
     <section class="panel-card">
         <div class="section-title">Installed Copilot agents</div>
-        <p class="panel-copy">Workspace clones are stored under <code>.ghcpsuite\agents</code> and mirrored into the Copilot user-agents folder only for runtime compatibility. Built-ins come from the Copilot CLI package; global customs still come from <code>~/.copilot/agents</code> and legacy <code>.github/agents</code>.</p>
+        <p class="panel-copy">Workspace clones are stored in the suite data home under each workspace's <code>agents</code> folder and mirrored into the Copilot user-agents folder only for runtime compatibility. Built-ins come from the Copilot CLI package; global customs still come from <code>~/.copilot/agents</code> and legacy <code>.github/agents</code>.</p>
         @if (!string.IsNullOrWhiteSpace(_editorMessage))
         {
             <p class="feedback-banner @(_editorSucceeded ? "feedback-success" : "feedback-error")">@_editorMessage</p>
@@ -172,17 +264,19 @@ else
     private const string DefaultTab = "default";
 
     private bool _loading = true;
+    private bool _isWorkspaceScope;
     private IReadOnlyList<CopilotDefinedAgent> _agents = Array.Empty<CopilotDefinedAgent>();
     private IReadOnlyList<CopilotDefinedAgent> _workspaceAgents = Array.Empty<CopilotDefinedAgent>();
     private IReadOnlyList<CopilotDefinedAgent> _customAgents = Array.Empty<CopilotDefinedAgent>();
     private IReadOnlyList<CopilotDefinedAgent> _defaultAgents = Array.Empty<CopilotDefinedAgent>();
     private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
+    private CopilotWorkspace? _activeWorkspace;
     private string _selectedTab = WorkspaceTab;
     private string? _cloneWorkspaceId;
     private string? _editorMessage;
     private bool _editorSucceeded;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
         await LoadAsync();
     }
@@ -204,23 +298,51 @@ else
     private async Task LoadAsync()
     {
         _loading = true;
+        _isWorkspaceScope = IsWorkspaceScopeRoute();
         _workspaces = await WorkService.GetWorkspacesAsync();
+        _activeWorkspace = _isWorkspaceScope ? await WorkService.GetActiveWorkspaceAsync() : null;
+
+        if (_isWorkspaceScope && _activeWorkspace is null)
+        {
+            _loading = false;
+            Navigation.NavigateTo("/", replace: true);
+            return;
+        }
+
         _agents = await AgentCatalogService.GetDefinedAgentsAsync();
-        _workspaceAgents = _agents.Where(agent => agent.IsWorkspaceScoped).ToArray();
+        _workspaceAgents = _isWorkspaceScope
+            ? _agents.Where(agent =>
+                    agent.IsWorkspaceScoped
+                    && string.Equals(agent.WorkspaceId, _activeWorkspace!.Id, StringComparison.OrdinalIgnoreCase))
+                .ToArray()
+            : _agents.Where(agent => agent.IsWorkspaceScoped).ToArray();
         _customAgents = _agents.Where(agent => agent.IsCustom && !agent.IsWorkspaceScoped).ToArray();
         _defaultAgents = _agents.Where(agent => !agent.IsCustom).ToArray();
 
-        if (_workspaces.Count > 0 && string.IsNullOrWhiteSpace(_cloneWorkspaceId))
+        if (!_isWorkspaceScope && _workspaces.Count > 0 && string.IsNullOrWhiteSpace(_cloneWorkspaceId))
         {
             _cloneWorkspaceId = (await WorkService.GetActiveWorkspaceAsync())?.Id ?? _workspaces[0].Id;
         }
 
-        if (_selectedTab == WorkspaceTab && _workspaceAgents.Count == 0)
+        if (!_isWorkspaceScope && _selectedTab == WorkspaceTab && _workspaceAgents.Count == 0)
         {
             _selectedTab = _customAgents.Count > 0 ? CustomTab : DefaultTab;
         }
 
+        if (_isWorkspaceScope)
+        {
+            _selectedTab = WorkspaceTab;
+        }
+
         _loading = false;
+    }
+
+    private bool IsWorkspaceScopeRoute()
+    {
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var queryIndex = relativePath.IndexOf('?');
+        var path = (queryIndex >= 0 ? relativePath[..queryIndex] : relativePath).Trim('/');
+        return string.Equals(path, "workspace/agents", StringComparison.OrdinalIgnoreCase);
     }
 
     private void SelectTab(string tabId) => _selectedTab = tabId;

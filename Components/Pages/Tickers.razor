@@ -1,4 +1,5 @@
 @page "/tickers"
+@page "/workspace/tickers"
 @inject ICopilotTickerService TickerService
 @inject ICopilotWorkService WorkService
 @inject ICopilotConfigEditorService ConfigEditorService
@@ -6,7 +7,7 @@
 
 <PageTitle>GHCP Suite | Tickers</PageTitle>
 
-<h1>Tickers</h1>
+<h1>@(_isWorkspaceScope ? $"{_activeWorkspace?.Name ?? "Workspace"} tickers" : "Tickers")</h1>
 
 @if (_loading)
 {
@@ -18,7 +19,7 @@ else
         <article class="panel-card">
             <div class="panel-label">Tickers</div>
             <div class="panel-metric">@_tickers.Count</div>
-            <div class="panel-copy">Saved recurring prompts for GHCP or an optional custom agent.</div>
+            <div class="panel-copy">@(_isWorkspaceScope ? "Saved recurring prompts linked to this workspace." : "Saved recurring prompts across all workspaces.")</div>
         </article>
         <article class="panel-card">
             <div class="panel-label">Enabled</div>
@@ -28,7 +29,7 @@ else
         <article class="panel-card">
             <div class="panel-label">Recent runs</div>
             <div class="panel-metric">@_runs.Count</div>
-            <div class="panel-copy">Latest recorded ticker executions across all workspaces.</div>
+            <div class="panel-copy">@(_isWorkspaceScope ? "Latest recorded ticker executions for this workspace." : "Latest recorded ticker executions across all workspaces.")</div>
         </article>
     </section>
 
@@ -46,20 +47,34 @@ else
             }
             else
             {
+                @if (_isWorkspaceScope)
+                {
+                    <p class="panel-copy">These ticker changes are scoped to <code>@_activeWorkspace?.Name</code>.</p>
+                }
                 <div class="terminal-form">
                     <label>
                         <span>Name</span>
                         <input class="terminal-input" @bind="_draft.Name" />
                     </label>
-                    <label>
-                        <span>Workspace</span>
-                        <select class="terminal-input" @bind="_draft.WorkspaceId">
-                            @foreach (var workspace in _workspaces)
-                            {
-                                <option value="@workspace.Id">@workspace.Name</option>
-                            }
-                        </select>
-                    </label>
+                    @if (_isWorkspaceScope)
+                    {
+                        <label>
+                            <span>Workspace</span>
+                            <input class="terminal-input" value="@(_activeWorkspace?.Name ?? "Current workspace")" disabled />
+                        </label>
+                    }
+                    else
+                    {
+                        <label>
+                            <span>Workspace</span>
+                            <select class="terminal-input" @bind="_draft.WorkspaceId">
+                                @foreach (var workspace in _workspaces)
+                                {
+                                    <option value="@workspace.Id">@workspace.Name</option>
+                                }
+                            </select>
+                        </label>
+                    }
                     <label>
                         <span>Agent (optional)</span>
                         <input class="terminal-input" @bind="_draft.AgentName" placeholder="workspace-agent-name" />
@@ -120,7 +135,7 @@ else
 
     <section class="panel-card">
         <div class="section-title">Saved tickers</div>
-        @if (_workspaces.Count > 0)
+        @if (!_isWorkspaceScope && _workspaces.Count > 0)
         {
             <div class="panel-actions">
                 <label class="toolbar-field">
@@ -161,7 +176,7 @@ else
                         <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
                         <button type="button" class="action-button action-button-small" @onclick="() => RunNowAsync(ticker)">Run now</button>
                         <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => EditTicker(ticker.Id)">Edit</button>
-                        @if (_workspaces.Count > 0)
+                        @if (!_isWorkspaceScope && _workspaces.Count > 0)
                         {
                             <button type="button" class="action-button action-button-small action-button-muted" @onclick="() => CloneTickerAsync(ticker.Id)">Clone</button>
                         }
@@ -184,9 +199,11 @@ else
     public string? EditTickerId { get; set; }
 
     private bool _loading = true;
+    private bool _isWorkspaceScope;
     private IReadOnlyList<CopilotWorkspace> _workspaces = Array.Empty<CopilotWorkspace>();
     private IReadOnlyList<CopilotTickerDefinition> _tickers = Array.Empty<CopilotTickerDefinition>();
     private IReadOnlyList<CopilotTickerRun> _runs = Array.Empty<CopilotTickerRun>();
+    private CopilotWorkspace? _activeWorkspace;
     private CopilotTickerDefinition _draft = new() { IntervalMinutes = 60, Enabled = true };
     private string? _editingTickerId;
     private string? _cloneWorkspaceId;
@@ -201,21 +218,46 @@ else
     private async Task LoadAsync()
     {
         _loading = true;
+        _isWorkspaceScope = IsWorkspaceScopeRoute();
         _workspaces = await WorkService.GetWorkspacesAsync();
-        _tickers = await TickerService.GetTickersAsync();
-        _runs = await TickerService.GetTickerRunsAsync(maxItems: 20);
+        _activeWorkspace = _isWorkspaceScope ? await WorkService.GetActiveWorkspaceAsync() : null;
 
-        var requestedWorkspaceId = !string.IsNullOrWhiteSpace(WorkspaceQueryId)
+        if (_isWorkspaceScope && _activeWorkspace is null)
+        {
+            _loading = false;
+            Navigation.NavigateTo("/", replace: true);
+            return;
+        }
+
+        var allTickers = await TickerService.GetTickersAsync();
+        var allRuns = await TickerService.GetTickerRunsAsync(maxItems: 20);
+
+        if (_isWorkspaceScope)
+        {
+            var workspaceId = _activeWorkspace!.Id;
+            _tickers = allTickers.Where(ticker => string.Equals(ticker.WorkspaceId, workspaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            _runs = allRuns.Where(run => string.Equals(run.WorkspaceId, workspaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
+        else
+        {
+            _tickers = allTickers;
+            _runs = allRuns;
+        }
+
+        var requestedWorkspaceId = !_isWorkspaceScope
+            && !string.IsNullOrWhiteSpace(WorkspaceQueryId)
             && _workspaces.Any(workspace => string.Equals(workspace.Id, WorkspaceQueryId, StringComparison.OrdinalIgnoreCase))
                 ? WorkspaceQueryId
                 : null;
 
-        var defaultWorkspaceId = requestedWorkspaceId
-            ?? (await WorkService.GetActiveWorkspaceAsync())?.Id
-            ?? _workspaces.FirstOrDefault()?.Id
-            ?? string.Empty;
+        var defaultWorkspaceId = _isWorkspaceScope
+            ? _activeWorkspace!.Id
+            : requestedWorkspaceId
+                ?? (await WorkService.GetActiveWorkspaceAsync())?.Id
+                ?? _workspaces.FirstOrDefault()?.Id
+                ?? string.Empty;
 
-        if (string.IsNullOrWhiteSpace(_cloneWorkspaceId) && !string.IsNullOrWhiteSpace(defaultWorkspaceId))
+        if (!_isWorkspaceScope && string.IsNullOrWhiteSpace(_cloneWorkspaceId) && !string.IsNullOrWhiteSpace(defaultWorkspaceId))
         {
             _cloneWorkspaceId = defaultWorkspaceId;
         }
@@ -235,6 +277,14 @@ else
         }
 
         _loading = false;
+    }
+
+    private bool IsWorkspaceScopeRoute()
+    {
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var queryIndex = relativePath.IndexOf('?');
+        var path = (queryIndex >= 0 ? relativePath[..queryIndex] : relativePath).Trim('/');
+        return string.Equals(path, "workspace/tickers", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SaveTickerAsync()
@@ -303,7 +353,10 @@ else
             return;
         }
 
-        Navigation.NavigateTo($"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}&edit={Uri.EscapeDataString(tickerId)}", forceLoad: false);
+        var destination = _isWorkspaceScope
+            ? $"/workspace/tickers?edit={Uri.EscapeDataString(tickerId)}"
+            : $"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}&edit={Uri.EscapeDataString(tickerId)}";
+        Navigation.NavigateTo(destination, forceLoad: false);
     }
 
     private async Task ToggleEnabledAsync(CopilotTickerDefinition ticker)
@@ -344,9 +397,11 @@ else
 
     private void ClearEditQuery(string? workspaceId)
     {
-        var destination = string.IsNullOrWhiteSpace(workspaceId)
-            ? "/tickers"
-            : $"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}";
+        var destination = _isWorkspaceScope
+            ? "/workspace/tickers"
+            : string.IsNullOrWhiteSpace(workspaceId)
+                ? "/tickers"
+                : $"/tickers?workspaceId={Uri.EscapeDataString(workspaceId)}";
         Navigation.NavigateTo(destination, forceLoad: false);
     }
 

@@ -43,7 +43,8 @@ public sealed class CopilotAgentCatalogService(
                 continue;
             }
 
-            var agentsRoot = CopilotWorkspaceStorage.GetAgentsRoot(workspace.RootPath);
+            CopilotWorkspaceStorage.EnsureWorkspaceDataStructure(workspace.DataRootPath, workspace.RootPath);
+            var agentsRoot = CopilotWorkspaceStorage.GetAgentsRoot(workspace.DataRootPath);
             var filePath = Path.Combine(agentsRoot, workspaceAgent.FileName);
             if (!File.Exists(filePath))
             {

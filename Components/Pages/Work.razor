@@ -1,249 +1,135 @@
+@page "/workspace/work"
 @page "/work"
 @inject ICopilotWorkService WorkService
-@inject ICopilotWorkDataService WorkDataService
 @inject NavigationManager Navigation
 
-<PageTitle>GHCP Suite | Work</PageTitle>
-
-<h1>Work</h1>
+<PageTitle>GHCP Suite | Workspace Work</PageTitle>
 
 @if (_loading)
 {
-    <p class="empty-state">Loading work dashboard...</p>
+    <p class="empty-state">Loading workspace work...</p>
+}
+else if (_snapshot is null)
+{
+    <section class="panel-card">
+        <div class="section-title">Workspace work</div>
+        <p class="empty-state">Choose a workspace first to see its workboard.</p>
+        <div class="panel-actions">
+            <a class="action-button" href="/">Change workspace</a>
+        </div>
+    </section>
 }
 else
 {
+    <h1>@_snapshot.Workspace.Name work</h1>
+
     <section class="panel-card">
-        <div class="section-title">Cross-workspace portfolio</div>
+        <div class="section-title">Workspace workboard</div>
         <p class="panel-copy">
-            Workspace pages are where execution happens. Work stays above them so you can triage the entire portfolio,
-            reopen saved operating views, spot what needs attention, and move between workspaces without losing the broader picture.
+            This view stays inside the current workspace and only shows work linked to <code>@_snapshot.Workspace.Name</code>.
         </p>
         <div class="panel-actions">
-            @if (_activeWorkspace is not null)
-            {
-                <a class="action-button" href="/workspaces/@Uri.EscapeDataString(_activeWorkspace.Id)">Open active workspace</a>
-            }
-            <a class="action-button action-button-ghost" href="/dashboards">Open dashboards</a>
-            <a class="action-button action-button-ghost" href="/sessions">Browse sessions</a>
+            <a class="action-button" href="/workspace">Open overview</a>
+            <a class="action-button action-button-ghost" href="/workspace/sessions">Open workspace sessions</a>
+            <a class="action-button action-button-ghost" href="/workspace/tickers">Open workspace tickers</a>
+            <a class="action-button action-button-ghost" href="/workspace/agents">Open workspace agents</a>
         </div>
     </section>
 
     <section class="panel-grid">
         <article class="panel-card">
-            <div class="panel-label">Managed workspaces</div>
-            <div class="panel-metric">@_workspaceDashboard.WorkspaceCount</div>
-            <div class="panel-copy">Workspaces currently tracked by the suite.</div>
+            <div class="panel-label">Sessions</div>
+            <div class="panel-metric">@_snapshot.Telemetry.SessionCount</div>
+            <div class="panel-copy">Tracked sessions scoped to this workspace.</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Active work</div>
-            <div class="panel-metric">@_dashboard.ActiveSessions</div>
-            <div class="panel-copy">Sessions currently marked Active.</div>
+            <div class="panel-label">Active</div>
+            <div class="panel-metric">@_snapshot.Telemetry.ActiveSessions</div>
+            <div class="panel-copy">Sessions currently in progress.</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Blocked work</div>
-            <div class="panel-metric">@_dashboard.BlockedSessions</div>
+            <div class="panel-label">Blocked</div>
+            <div class="panel-metric">@_snapshot.Telemetry.BlockedSessions</div>
             <div class="panel-copy">Sessions waiting on an unblock.</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Stalled work</div>
-            <div class="panel-metric">@_dashboard.StalledSessions</div>
-            <div class="panel-copy">Sessions untouched for at least a week and not marked Done.</div>
+            <div class="panel-label">Done</div>
+            <div class="panel-metric">@DoneSessionCount</div>
+            <div class="panel-copy">Sessions already completed.</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Resumed this week</div>
-            <div class="panel-metric">@_dashboard.ResumedThisWeek</div>
-            <div class="panel-copy">Resume actions recorded over the last seven days.</div>
+            <div class="panel-label">Tickers</div>
+            <div class="panel-metric">@_snapshot.Telemetry.TickerCount</div>
+            <div class="panel-copy">@_snapshot.Telemetry.EnabledTickers enabled recurring task(s).</div>
         </article>
         <article class="panel-card">
-            <div class="panel-label">Recurring runs</div>
-            <div class="panel-metric">@_workspaceDashboard.EnabledTickers</div>
-            <div class="panel-copy">@_workspaceDashboard.TotalTickers total ticker(s) across the portfolio.</div>
-        </article>
-        <article class="panel-card">
-            <div class="panel-label">Tracked agents</div>
-            <div class="panel-metric">@_workspaceDashboard.TotalTrackedAgents</div>
-            <div class="panel-copy">Distinct agents observed across workspaces.</div>
+            <div class="panel-label">Agents</div>
+            <div class="panel-metric">@_snapshot.AgentsUsed.Count</div>
+            <div class="panel-copy">Agents observed or assigned inside this workspace.</div>
         </article>
     </section>
 
-    <section class="content-grid">
-        <article class="panel-card">
-            <div class="section-title">Workspace portfolio</div>
-            <p class="panel-copy">Use this page to compare workspaces and decide where to drop into execution next.</p>
-            @if (FocusWorkspaces.Count == 0)
-            {
-                <p class="empty-state">No managed workspaces yet.</p>
-            }
-            else
-            {
-                <div class="table-shell">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Workspace</th>
-                                <th>Last worked</th>
-                                <th>Sessions</th>
-                                <th>Blocked</th>
-                                <th>Tickers</th>
-                                <th>Time spent</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var workspace in FocusWorkspaces)
-                            {
-                                <tr>
-                                    <td><a href="/workspaces/@Uri.EscapeDataString(workspace.WorkspaceId)">@workspace.Name</a></td>
-                                    <td>@FormatDate(workspace.LastWorkedAt)</td>
-                                    <td>@workspace.SessionCount (@workspace.ActiveSessions active)</td>
-                                    <td>@workspace.BlockedSessions</td>
-                                    <td>@workspace.TickerCount (@workspace.EnabledTickers enabled)</td>
-                                    <td>@FormatDuration(workspace.TimeSpent)</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </article>
+    <section class="panel-card">
+        <div class="settings-grid">
+            <div class="settings-field">
+                <label>Search</label>
+                <input class="terminal-input" @bind="_searchFilter" @bind:event="oninput" placeholder="Name, summary, next action, or project" />
+            </div>
+            <div class="settings-field">
+                <label>Status</label>
+                <select class="terminal-input" @bind="_statusFilter">
+                    <option value="">All statuses</option>
+                    @foreach (var status in WorkflowStatuses)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </div>
+        </div>
+    </section>
 
+    <section class="content-grid">
         <article class="panel-card">
             <div class="section-title">Needs attention</div>
-            <p class="panel-copy">Priority workspaces that look blocked, stale, or currently active.</p>
-            @if (AttentionWorkspaces.Count == 0)
+            @if (AttentionSessions.Count == 0)
             {
-                <p class="empty-state">Nothing urgent is bubbling up right now.</p>
+                <p class="empty-state">Nothing urgent is bubbling up in this workspace right now.</p>
             }
             else
             {
-                @foreach (var workspace in AttentionWorkspaces)
+                @foreach (var session in AttentionSessions)
                 {
                     <div class="list-row">
                         <div>
-                            <div class="row-title"><a href="/workspaces/@Uri.EscapeDataString(workspace.WorkspaceId)">@workspace.Name</a></div>
-                            <div class="row-description">@DescribeWorkspaceAttention(workspace)</div>
-                            <div class="row-meta">@workspace.RootPath</div>
-                        </div>
-                        <div class="row-side">
-                            <span class="status-pill @GetWorkspaceAttentionClass(workspace)">@GetWorkspaceAttentionLabel(workspace)</span>
-                        </div>
-                    </div>
-                }
-            }
-        </article>
-    </section>
-
-    <section class="content-grid">
-        <article class="panel-card">
-            <div class="section-title">Saved views</div>
-            <p class="panel-copy">Create these from the Sessions page to reopen common filters quickly.</p>
-            @if (_savedViews.Count == 0)
-            {
-                <p class="empty-state">No saved views yet.</p>
-            }
-            else
-            {
-                <div class="quick-actions">
-                    @foreach (var view in _savedViews)
-                    {
-                        <a class="selector-button" href="@BuildViewUrl(view)">
-                            <span>@view.Name</span>
-                            <span class="row-meta">@FormatViewMeta(view)</span>
-                        </a>
-                    }
-                </div>
-            }
-        </article>
-
-        <article class="panel-card">
-            <div class="section-title">Templates</div>
-            <p class="panel-copy">Apply these from a session detail page to seed tasks and status.</p>
-            @foreach (var template in _templates)
-            {
-                <div class="list-row">
-                    <div>
-                        <div class="row-title">@template.Name</div>
-                        <div class="row-description">@template.Description</div>
-                        <div class="row-meta">@template.Tasks.Count task(s) · @template.Status · @template.Priority</div>
-                    </div>
-                    <div class="row-side">
-                        <span>@template.NextAction</span>
-                    </div>
-                </div>
-            }
-        </article>
-
-        <article class="panel-card">
-            <div class="section-title">Most-used agents</div>
-            @if (_dashboard.TopAgents.Count == 0)
-            {
-                <p class="empty-state">No agent runs have been recorded yet.</p>
-            }
-            else
-            {
-                @foreach (var agent in _dashboard.TopAgents)
-                {
-                    <div class="list-row">
-                        <div>
-                            <div class="row-title">@agent.Name</div>
-                            <div class="row-meta">Run history</div>
-                        </div>
-                        <div class="row-side">
-                            <span>@agent.RunCount run(s)</span>
-                        </div>
-                    </div>
-                }
-            }
-        </article>
-    </section>
-
-    <section class="content-grid">
-        <article class="panel-card">
-            <div class="section-title">Project signals</div>
-            @if (_dashboard.TopProjects.Count == 0)
-            {
-                <p class="empty-state">No projects have been inferred yet.</p>
-            }
-            else
-            {
-                <div class="table-shell">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Project</th>
-                                <th>Sessions</th>
-                                <th>Active</th>
-                                <th>Blocked</th>
-                                <th>Done</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var project in _dashboard.TopProjects)
+                            <div class="row-title"><a href="/sessions/@session.SessionId">@session.Name</a></div>
+                            @if (!string.IsNullOrWhiteSpace(session.Description))
                             {
-                                <tr>
-                                    <td><a href="/sessions?groupBy=project&project=@Uri.EscapeDataString(project.Name)">@project.Name</a></td>
-                                    <td>@project.SessionCount</td>
-                                    <td>@project.ActiveCount</td>
-                                    <td>@project.BlockedCount</td>
-                                    <td>@project.DoneCount</td>
-                                </tr>
+                                <div class="row-description">@session.Description</div>
                             }
-                        </tbody>
-                    </table>
-                </div>
+                            <div class="row-meta">@session.WorkflowStatus · @(session.Project ?? "No project")</div>
+                            @if (!string.IsNullOrWhiteSpace(session.NextAction))
+                            {
+                                <div class="row-meta">Next: @session.NextAction</div>
+                            }
+                        </div>
+                        <div class="row-side">
+                            <span class="status-pill @GetWorkflowClass(session.WorkflowStatus)">@session.WorkflowStatus</span>
+                        </div>
+                    </div>
+                }
             }
         </article>
 
         <article class="panel-card">
-            <div class="section-title">Timeline</div>
-            @if (_dashboard.RecentActivity.Count == 0)
+            <div class="section-title">Recent activity</div>
+            @if (_snapshot.RecentActivity.Count == 0)
             {
                 <p class="empty-state">No tracked activity yet.</p>
             }
             else
             {
                 <div class="timeline-list">
-                    @foreach (var entry in _dashboard.RecentActivity)
+                    @foreach (var entry in _snapshot.RecentActivity)
                     {
                         <div class="timeline-item">
                             <div class="timeline-meta">@FormatDate(entry.Timestamp) · @FormatActivityType(entry.Type)</div>
@@ -254,112 +140,183 @@ else
                 </div>
             }
         </article>
+    </section>
+
+    <section class="content-grid">
+        <article class="panel-card">
+            <div class="section-title">Session board</div>
+            @if (FilteredSessions.Count == 0)
+            {
+                <p class="empty-state">No workspace sessions matched the current filters.</p>
+            }
+            else
+            {
+                <div class="table-shell">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Session</th>
+                                <th>Status</th>
+                                <th>Priority</th>
+                                <th>Tasks</th>
+                                <th>Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var session in FilteredSessions)
+                            {
+                                <tr>
+                                    <td>
+                                        <a href="/sessions/@session.SessionId">@session.Name</a>
+                                        @if (!string.IsNullOrWhiteSpace(session.Description))
+                                        {
+                                            <div class="row-description">@session.Description</div>
+                                        }
+                                        <div class="row-meta">@(session.Project ?? "No project")</div>
+                                        @if (!string.IsNullOrWhiteSpace(session.NextAction))
+                                        {
+                                            <div class="row-meta">Next: @session.NextAction</div>
+                                        }
+                                    </td>
+                                    <td><span class="status-pill @GetWorkflowClass(session.WorkflowStatus)">@session.WorkflowStatus</span></td>
+                                    <td>@session.Priority</td>
+                                    <td>@session.CompletedTaskCount/@(session.CompletedTaskCount + session.OpenTaskCount)</td>
+                                    <td>@FormatDate(session.UpdatedAt)</td>
+                                    <td>
+                                        <div class="inline-actions">
+                                            <a class="action-button action-button-small" href="/sessions/@session.SessionId">Open</a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </article>
 
         <article class="panel-card">
-            <div class="section-title">Search</div>
-            <form class="terminal-form" @onsubmit="RunSearchAsync" @onsubmit:preventDefault="true">
-                <input class="terminal-input" placeholder="Search sessions, notes, plans, checkpoints, tasks, or file names" @bind="_searchQuery" />
-                <button type="submit" class="action-button">Search</button>
-            </form>
-            @if (_searchPerformed && _searchResults.Count == 0)
+            <div class="section-title">Workspace automation</div>
+            @if (_snapshot.Tickers.Count == 0)
             {
-                <p class="empty-state">No matching sessions found.</p>
+                <p class="empty-state">No tickers are linked to this workspace yet.</p>
             }
-            else if (_searchResults.Count > 0)
+            else
             {
-                @foreach (var result in _searchResults)
+                @foreach (var ticker in _snapshot.Tickers.OrderBy(ticker => ticker.Name, StringComparer.OrdinalIgnoreCase))
                 {
                     <div class="list-row">
                         <div>
-                            <div class="row-title"><a href="/sessions/@result.SessionId">@result.SessionName</a></div>
-                            <div class="row-description">@result.Excerpt</div>
-                            <div class="row-meta">@result.MatchSource · @result.Project · @result.Status</div>
+                            <div class="row-title">@ticker.Name</div>
+                            <div class="row-description">@ticker.Prompt</div>
+                            <div class="row-meta">Every @ticker.IntervalMinutes min · @(string.IsNullOrWhiteSpace(ticker.AgentName) ? "GHCP" : $"Agent: {ticker.AgentName}")</div>
+                        </div>
+                        <div class="row-side">
+                            <span class="status-pill @(ticker.Enabled ? "status-live" : "status-idle")">@((ticker.LastStatus ?? (ticker.Enabled ? "Scheduled" : "Disabled")))</span>
                         </div>
                     </div>
                 }
             }
-            <div class="panel-actions">
-                <span class="row-meta">Stored data file: @WorkDataService.GetDataFilePath()</span>
-            </div>
+        </article>
+
+        <article class="panel-card">
+            <div class="section-title">Agents used</div>
+            @if (_snapshot.AgentsUsed.Count == 0)
+            {
+                <p class="empty-state">No agents have been used in this workspace yet.</p>
+            }
+            else
+            {
+                @foreach (var agent in _snapshot.AgentsUsed)
+                {
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title">@agent.Name</div>
+                            <div class="row-meta">Workspace usage</div>
+                        </div>
+                        <div class="row-side">
+                            <span>@agent.RunCount run(s)</span>
+                        </div>
+                    </div>
+                }
+            }
         </article>
     </section>
 }
 
 @code {
-    private bool _loading = true;
-    private CopilotDashboardSnapshot _dashboard = new(0, 0, 0, 0, 0, 0, Array.Empty<CopilotProjectSummary>(), Array.Empty<CopilotAgentUsageSummary>(), Array.Empty<CopilotActivityEntry>());
-    private CopilotWorkspaceDashboardSnapshot _workspaceDashboard = new(0, 0, 0, 0, 0, TimeSpan.Zero, Array.Empty<CopilotWorkspaceTelemetry>(), Array.Empty<CopilotActivityEntry>());
-    private CopilotWorkspace? _activeWorkspace;
-    private IReadOnlyList<CopilotSavedView> _savedViews = Array.Empty<CopilotSavedView>();
-    private IReadOnlyList<CopilotWorkTemplate> _templates = Array.Empty<CopilotWorkTemplate>();
-    private IReadOnlyList<CopilotWorkSearchResult> _searchResults = Array.Empty<CopilotWorkSearchResult>();
-    private string _searchQuery = string.Empty;
-    private bool _searchPerformed;
+    private static readonly string[] WorkflowStatuses = ["Planned", "Active", "Blocked", "Done"];
 
-    protected override async Task OnInitializedAsync()
+    private bool _loading = true;
+    private CopilotWorkspaceSnapshot? _snapshot;
+    private string _searchFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+
+    protected override async Task OnParametersSetAsync()
     {
-        _dashboard = await WorkService.GetDashboardAsync();
-        _workspaceDashboard = await WorkService.GetWorkspaceDashboardAsync();
-        _activeWorkspace = await WorkService.GetActiveWorkspaceAsync();
-        _savedViews = await WorkService.GetSavedViewsAsync();
-        _templates = await WorkService.GetTemplatesAsync();
+        _loading = true;
+
+        var relativePath = GetRelativePath();
+        if (string.Equals(relativePath, "work", StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo("/workspace/work", replace: true);
+            return;
+        }
+
+        var activeWorkspace = await WorkService.GetActiveWorkspaceAsync();
+        if (activeWorkspace is null)
+        {
+            _snapshot = null;
+            _loading = false;
+            Navigation.NavigateTo("/", replace: true);
+            return;
+        }
+
+        _snapshot = await WorkService.GetWorkspaceSnapshotAsync(activeWorkspace.Id);
         _loading = false;
     }
 
-    private IReadOnlyList<CopilotWorkspaceTelemetry> FocusWorkspaces =>
-        _workspaceDashboard.Workspaces.Take(8).ToArray();
-
-    private IReadOnlyList<CopilotWorkspaceTelemetry> AttentionWorkspaces =>
-        _workspaceDashboard.Workspaces
-            .Where(workspace => workspace.BlockedSessions > 0 || workspace.ActiveSessions > 0 || IsWorkspaceStale(workspace))
-            .OrderByDescending(workspace => workspace.BlockedSessions)
-            .ThenByDescending(workspace => IsWorkspaceStale(workspace))
-            .ThenByDescending(workspace => workspace.ActiveSessions)
-            .ThenBy(workspace => workspace.LastWorkedAt ?? DateTimeOffset.MinValue)
-            .Take(6)
+    private IReadOnlyList<CopilotSessionSummary> FilteredSessions => _snapshot is null
+        ? Array.Empty<CopilotSessionSummary>()
+        : _snapshot.Sessions
+            .Where(session => string.IsNullOrWhiteSpace(_statusFilter) || string.Equals(session.WorkflowStatus, _statusFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(session => MatchesSearch(session, _searchFilter))
+            .OrderByDescending(session => session.UpdatedAt ?? session.CreatedAt ?? DateTimeOffset.MinValue)
             .ToArray();
 
-    private async Task RunSearchAsync()
+    private IReadOnlyList<CopilotSessionSummary> AttentionSessions => FilteredSessions
+        .Where(session =>
+            string.Equals(session.WorkflowStatus, "Blocked", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(session.WorkflowStatus, "Active", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(session.NextAction))
+        .Take(8)
+        .ToArray();
+
+    private int DoneSessionCount => _snapshot?.Sessions.Count(session => string.Equals(session.WorkflowStatus, "Done", StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+    private static bool MatchesSearch(CopilotSessionSummary session, string query)
     {
-        _searchPerformed = true;
-        _searchResults = await WorkService.SearchAsync(_searchQuery);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return true;
+        }
+
+        return Contains(session.Name, query)
+            || Contains(session.Description, query)
+            || Contains(session.Project, query)
+            || Contains(session.NextAction, query)
+            || Contains(session.SessionId, query);
     }
 
-    private static string BuildViewUrl(CopilotSavedView view)
+    private static bool Contains(string? value, string query) =>
+        !string.IsNullOrWhiteSpace(value) && value.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private string GetRelativePath()
     {
-        var query = new List<string> { $"groupBy={Uri.EscapeDataString(view.GroupBy)}" };
-        if (!string.IsNullOrWhiteSpace(view.Status))
-        {
-            query.Add($"status={Uri.EscapeDataString(view.Status)}");
-        }
-        if (!string.IsNullOrWhiteSpace(view.Project))
-        {
-            query.Add($"project={Uri.EscapeDataString(view.Project)}");
-        }
-        if (!string.IsNullOrWhiteSpace(view.Category))
-        {
-            query.Add($"category={Uri.EscapeDataString(view.Category)}");
-        }
-        if (!string.IsNullOrWhiteSpace(view.SearchText))
-        {
-            query.Add($"search={Uri.EscapeDataString(view.SearchText)}");
-        }
-
-        return $"/sessions?{string.Join("&", query)}";
-    }
-
-    private static string FormatViewMeta(CopilotSavedView view)
-    {
-        var parts = new[]
-        {
-            view.GroupBy,
-            view.Status,
-            view.Project,
-            view.Category,
-            view.SearchText
-        }.Where(value => !string.IsNullOrWhiteSpace(value));
-
-        return string.Join(" · ", parts);
+        var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var queryIndex = relativePath.IndexOf('?');
+        return (queryIndex >= 0 ? relativePath[..queryIndex] : relativePath).Trim('/');
     }
 
     private static string FormatActivityType(string type) => type switch
@@ -370,7 +327,6 @@ else
         "workspace-open" => "Workspace open",
         "ticker-run" => "Ticker run",
         "config-open" => "Config edit",
-        "note-save" => "Notes saved",
         "work-save" => "Work updated",
         "template-apply" => "Template applied",
         _ => "Activity"
@@ -388,66 +344,15 @@ else
         return string.Join(" · ", parts);
     }
 
-    private static string FormatDate(DateTimeOffset value) => value.ToLocalTime().ToString("g");
+    private static string GetWorkflowClass(string status) => status switch
+    {
+        "Active" => "status-live",
+        "Blocked" => "status-warn",
+        "Done" => "status-done",
+        _ => "status-idle"
+    };
 
     private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("g") ?? "Unknown";
 
-    private static string FormatDuration(TimeSpan duration) =>
-        duration.TotalHours >= 1
-            ? $"{duration.TotalHours:0.#}h"
-            : $"{Math.Max(1, duration.TotalMinutes):0}m";
-
-    private static bool IsWorkspaceStale(CopilotWorkspaceTelemetry workspace) =>
-        workspace.SessionCount > 0
-        && (workspace.LastWorkedAt ?? DateTimeOffset.MinValue) < DateTimeOffset.UtcNow.AddDays(-7);
-
-    private static string GetWorkspaceAttentionLabel(CopilotWorkspaceTelemetry workspace)
-    {
-        if (workspace.BlockedSessions > 0)
-        {
-            return "Blocked";
-        }
-
-        if (IsWorkspaceStale(workspace))
-        {
-            return "Stale";
-        }
-
-        if (workspace.ActiveSessions > 0)
-        {
-            return "Active";
-        }
-
-        return "Tracked";
-    }
-
-    private static string GetWorkspaceAttentionClass(CopilotWorkspaceTelemetry workspace)
-    {
-        if (workspace.BlockedSessions > 0)
-        {
-            return "status-idle";
-        }
-
-        return workspace.ActiveSessions > 0 ? "status-live" : "status-done";
-    }
-
-    private static string DescribeWorkspaceAttention(CopilotWorkspaceTelemetry workspace)
-    {
-        if (workspace.BlockedSessions > 0)
-        {
-            return $"{workspace.BlockedSessions} blocked session(s), {workspace.ActiveSessions} active, last worked {FormatDate(workspace.LastWorkedAt).ToLowerInvariant()}.";
-        }
-
-        if (IsWorkspaceStale(workspace))
-        {
-            return $"{workspace.SessionCount} tracked session(s), but nothing recorded in the last week.";
-        }
-
-        if (workspace.ActiveSessions > 0)
-        {
-            return $"{workspace.ActiveSessions} active session(s), {workspace.TickerCount} ticker(s), {workspace.AgentCount} agent(s) observed.";
-        }
-
-        return $"{workspace.SessionCount} tracked session(s), {workspace.TickerCount} ticker(s), {workspace.AgentCount} agent(s) observed.";
-    }
+    private static string FormatDate(DateTimeOffset value) => value.ToLocalTime().ToString("g");
 }

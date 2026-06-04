@@ -15,7 +15,8 @@ public interface ICopilotSettingsService
 
 public sealed class CopilotSettingsService(
     IHostEnvironment hostEnvironment,
-    IOptionsMonitor<CopilotSuiteOptions> optionsMonitor) : ICopilotSettingsService
+    IOptionsMonitor<CopilotSuiteOptions> optionsMonitor,
+    ICopilotEnvironmentService environmentService) : ICopilotSettingsService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -23,11 +24,17 @@ public sealed class CopilotSettingsService(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    public string GetSettingsFilePath() => Path.Combine(hostEnvironment.ContentRootPath, "customSettings.json");
+    public string GetSettingsFilePath()
+    {
+        var paths = environmentService.GetPaths();
+        CopilotSuiteStorage.EnsureSuiteHome(paths.SuiteHome);
+        return paths.SuiteSettingsPath;
+    }
 
     public async Task<CopilotSuiteOptions> GetSettingsAsync(CancellationToken cancellationToken = default)
     {
         var filePath = GetSettingsFilePath();
+        await MigrateLegacySettingsAsync(filePath, cancellationToken);
         if (!File.Exists(filePath))
         {
             return Clone(optionsMonitor.CurrentValue);
@@ -41,12 +48,14 @@ public sealed class CopilotSettingsService(
     public async Task SaveSettingsAsync(CopilotSuiteOptions options, CancellationToken cancellationToken = default)
     {
         var filePath = GetSettingsFilePath();
+        await MigrateLegacySettingsAsync(filePath, cancellationToken);
         var normalized = Normalize(options);
         var document = new SettingsDocument
         {
             CopilotSuite = normalized
         };
 
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         await using var stream = File.Create(filePath);
         await JsonSerializer.SerializeAsync(stream, document, SerializerOptions, cancellationToken);
     }
@@ -131,5 +140,25 @@ public sealed class CopilotSettingsService(
     private sealed class SettingsDocument
     {
         public CopilotSuiteOptions CopilotSuite { get; set; } = new();
+    }
+
+    private async Task MigrateLegacySettingsAsync(string targetPath, CancellationToken cancellationToken)
+    {
+        if (File.Exists(targetPath))
+        {
+            return;
+        }
+
+        var legacyPath = CopilotSuiteStorage.GetLegacySettingsFilePath(hostEnvironment.ContentRootPath);
+        if (!File.Exists(legacyPath))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+
+        await using var sourceStream = File.Open(legacyPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        await using var destinationStream = File.Create(targetPath);
+        await sourceStream.CopyToAsync(destinationStream, cancellationToken);
     }
 }
